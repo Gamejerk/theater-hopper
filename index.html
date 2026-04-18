@@ -50,8 +50,8 @@
       "iPic":               { offset: 12, note: "Premium/luxury dine-in; shorter preshow ~10-15 min" },
       "Studio Movie Grill": { offset: 18, note: "Dine-in chain; ~15-20 min" },
       "Flix Brewhouse":     { offset: 15, note: "Brewery dine-in; shorter preshow ~15 min" },
-      "Look Cinemas":       { offset: 18, note: "Southwest regional; ~15-20 min (estimated)" },
-      "LOOK Dine-In Cinemas": { offset: 18, note: "Dine-in chain; ~15-20 min (estimated)" },
+      "Look Cinemas":       { offset: 12, note: "Lighter preshow — minimal ads and short trailer block. ~10-15 min" },
+      "LOOK Dine-In Cinemas": { offset: 12, note: "Dine-in chain with lighter preshow; ~10-15 min" },
       "Santikos":           { offset: 18, note: "Texas regional; ~15-20 min (estimated)" },
       "B&B Theatres":       { offset: 20, note: "Midwest regional; standard ~20 min" },
       "Celebration Cinema": { offset: 13, note: "Their FAQ officially states 12-15 min" },
@@ -624,7 +624,7 @@
             }
             if (!hit) return m; // no TMDB match — keep basic info
 
-            const dr = await fetch(`${proxyUrl}/tmdb/movie/${hit.id}?append_to_response=credits`);
+            const dr = await fetch(`${proxyUrl}/tmdb/movie/${hit.id}?append_to_response=credits,videos`);
             const d  = await dr.json();
             if (!dr.ok) {
               console.warn("[TH] TMDB detail HTTP", dr.status, "for", m.title, "—", d?.error || "unknown error");
@@ -632,8 +632,14 @@
             }
 
             const primaryGenre = d.genres?.[0]?.name || "";
-            // trailerUrl starts as YouTube search — upgraded lazily to a direct link when synopsis is opened
-            const trailerUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent((d.title || m.title) + " official trailer")}`;
+            // Resolve trailer URL directly from the appended videos — no separate /videos call needed
+            const vids = d.videos?.results || [];
+            const pick = vids.find(v => v.site === 'YouTube' && v.type === 'Trailer' && v.official)
+                      || vids.find(v => v.site === 'YouTube' && v.type === 'Trailer')
+                      || vids.find(v => v.site === 'YouTube');
+            const trailerUrl = pick?.key
+              ? `https://www.youtube.com/watch?v=${pick.key}`
+              : `https://www.youtube.com/results?search_query=${encodeURIComponent((d.title || m.title) + " official trailer")}`;
             const enrichment = {
               title:      d.title || m.title,
               genre:      d.genres?.map(g => g.name).join(", ") || m.genre,
@@ -648,7 +654,7 @@
               trailerUrl,
               _tmdbId:    d.id,
             };
-            TMDB_CACHE.set(m.id, enrichment); // store for this session
+            tmdbCacheSet(m.id, enrichment); // persist across sessions
             return { ...m, ...enrichment };
           } catch (e) {
             console.warn("[TH] TMDB fetch failed for", m.title, "—", e.message);
@@ -759,10 +765,34 @@
     }
 
     // ── TMDB metadata cache ──────────────────────────────────────────────────
-    // Keyed by Fandango movie ID. Persists for the browser session.
-    // Benefit: changing the date on the same theater re-uses cached TMDB data
-    // (same movies, same Fandango IDs) → zero extra API calls.
+    // Keyed by Fandango movie ID. Persists to localStorage with a 24-hour TTL
+    // so repeat visits and page refreshes skip TMDB entirely for known movies.
+    const TMDB_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours in ms
     const TMDB_CACHE = new Map();
+    // Load valid (non-expired) entries from localStorage on startup
+    try {
+      const stored = JSON.parse(localStorage.getItem('th_tmdb_cache') || '{}');
+      const now = Date.now();
+      Object.entries(stored).forEach(([key, entry]) => {
+        if (entry?.ts && now - entry.ts < TMDB_CACHE_TTL) {
+          TMDB_CACHE.set(Number(key), entry.data);
+        }
+      });
+    } catch {}
+
+    function tmdbCacheSet(id, data) {
+      TMDB_CACHE.set(id, data);
+      try {
+        const stored = JSON.parse(localStorage.getItem('th_tmdb_cache') || '{}');
+        stored[id] = { data, ts: Date.now() };
+        // Prune expired entries so localStorage doesn't grow unbounded
+        const now = Date.now();
+        Object.keys(stored).forEach(k => {
+          if (!stored[k]?.ts || now - stored[k].ts >= TMDB_CACHE_TTL) delete stored[k];
+        });
+        localStorage.setItem('th_tmdb_cache', JSON.stringify(stored));
+      } catch {}
+    }
 
     // ── Clipboard helpers (with execCommand fallback for HTTP / file://) ────
     function legacyCopy(text) {
@@ -863,7 +893,12 @@
 
     // ── App ──────────────────────────────────────────────────────────────────
     function App() {
-      const [chain,       setChain]       = useState(() => fromStorage('th_chain', "AMC"));
+      const [chain,         setChain]         = useState(() => fromStorage('th_chain', "AMC"));
+      const [preshowOffset, setPreshowOffset] = useState(() => {
+        const saved = fromStorage('th_preshowOffset', null);
+        if (saved !== null) return saved;
+        return CHAIN_DATA[fromStorage('th_chain', "AMC")]?.offset ?? 20;
+      });
       const [buffer,      setBuffer]      = useState(() => fromStorage('th_buffer', 10));
       const [plan,        setPlan]        = useState(() => {
         // Only restore plan if it was saved today — stale plans from other days are discarded
@@ -930,7 +965,7 @@
       const dateOptions = useMemo(() => getDateOptions(), [todayStr]); // re-computes when date rolls over midnight
       const isToday     = dateOptions[dateIdx].isToday;
       const nowMinutes  = getNowMinutes();
-      const offset      = CHAIN_DATA[chain]?.offset ?? 20; // fallback 20 min for unknown chains
+      const offset      = preshowOffset;
       const isMobile    = windowWidth <= 768;
 
       // ── Time core ────────────────────────────────────────────────────────
@@ -958,6 +993,17 @@
         setBuffer(v);
         for (let i = 1; i < plan.length; i++) {
           if (realStart(plan[i].posted) - effectiveEnd(plan[i-1].movieId, plan[i-1].posted) < v) {
+            setPlan(plan.slice(0, i)); return;
+          }
+        }
+      };
+
+      // ── Preshow offset: trim plan if gaps shrink below buffer ────────────
+      const handlePreshowChange = (v) => {
+        setPreshowOffset(v);
+        for (let i = 1; i < plan.length; i++) {
+          const prevEnd = plan[i-1].posted + v + (movies.find(m => m.id === plan[i-1].movieId)?.runtime ?? 120) - (skipCredits ? CREDITS_ESTIMATE : 0);
+          if (plan[i].posted + v - prevEnd < buffer) {
             setPlan(plan.slice(0, i)); return;
           }
         }
@@ -1315,8 +1361,9 @@
       const selectTheater = (t) => {
         offerUndo(plan); // save plan before clearing — user can undo for 5s
         setSelectedTheater(t);
-        // Only set chain to a known CHAIN_DATA key so the dropdown + offset lookup don't break
-        setChain(CHAIN_DATA[t.chain] ? t.chain : "AMC");
+        const resolvedChain = CHAIN_DATA[t.chain] ? t.chain : "AMC";
+        setChain(resolvedChain);
+        setPreshowOffset(CHAIN_DATA[resolvedChain]?.offset ?? 20);
         setTheaterOpen(false);
         showToast(plan.length > 0 ? "📍 Theater updated — plan cleared" : "📍 Theater settings loaded");
         setPlan([]); setExpandedId(null); setExcludedIds([]); setQuickSuggestions([]); setLockJustPicks([]); setLockFillGaps([]); setNoComboMsg(""); setQuickPreset(null);
@@ -1513,32 +1560,6 @@
         }
       };
 
-      // ── Lazy trailer upgrade: fetch direct YouTube link when synopsis is opened ──
-      // trailerUrl starts as a YouTube search URL (works immediately as fallback).
-      // On first expand we hit /videos to upgrade it to the real official trailer link.
-      // Result is also written back to TMDB_CACHE so later re-expands are instant.
-      React.useEffect(() => {
-        if (!expandedId || !PROXY_URL) return;
-        const movie = movies.find(m => m.id === expandedId);
-        if (!movie?._tmdbId) return;
-        // Already upgraded to a direct watch link — skip
-        if (movie.trailerUrl && !movie.trailerUrl.includes('youtube.com/results')) return;
-        fetch(`${PROXY_URL}/tmdb/movie/${movie._tmdbId}/videos`)
-          .then(r => r.json())
-          .then(data => {
-            const vids = data.results || [];
-            const pick = vids.find(v => v.site === 'YouTube' && v.type === 'Trailer' && v.official)
-                      || vids.find(v => v.site === 'YouTube' && v.type === 'Trailer')
-                      || vids.find(v => v.site === 'YouTube');
-            if (!pick?.key) return; // no video found — keep YouTube search URL
-            const directUrl = `https://www.youtube.com/watch?v=${pick.key}`;
-            setMovies(prev => prev.map(m => m.id === expandedId ? { ...m, trailerUrl: directUrl } : m));
-            // Update cache so this movie never hits /videos again this session
-            const c = TMDB_CACHE.get(expandedId);
-            if (c) TMDB_CACHE.set(expandedId, { ...c, trailerUrl: directUrl });
-          })
-          .catch(() => {}); // silent — YouTube search URL stays as fallback
-      }, [expandedId]); // eslint-disable-line
 
       // ── Fetch theaters when a valid zip is entered or the date changes ───────
       // Debounced 600ms so we don't fire on every keystroke while typing.
@@ -1617,6 +1638,7 @@
         toStorage('th_skipCredits', skipCredits);
         toStorage('th_theme', theme);
         toStorage('th_chain', chain);
+        toStorage('th_preshowOffset', preshowOffset);
         toStorage('th_selectedTheater', selectedTheater);
         toStorage('th_theaterQuery', theaterQuery);
         toStorage('th_excludedIds', excludedIds);
@@ -1624,7 +1646,7 @@
         toStorage('th_selectedDateStr', dateOptions[dateIdx]?.dateStr || new Date().toDateString());
         toStorage('th_theaterRadius', theaterRadius);
         toStorage('th_planMode', planMode);
-      }, [plan, buffer, skipCredits, theme, chain, selectedTheater, theaterQuery, excludedIds, lockEntries, dateIdx, theaterRadius, planMode]);
+      }, [plan, buffer, preshowOffset, skipCredits, theme, chain, selectedTheater, theaterQuery, excludedIds, lockEntries, dateIdx, theaterRadius, planMode]);
 
       // ── Sync theme to data-theme attribute for CSS scrollbar vars ────────
       React.useEffect(() => {
@@ -1763,45 +1785,68 @@
           </div>
 
           {/* SETTINGS */}
-          <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: "14px", padding: "18px 20px", marginBottom: "14px", display: "flex", flexDirection: isMobile ? "column" : "row", gap: isMobile ? "18px" : "28px", flexWrap: "wrap", alignItems: "flex-start" }}>
-            {/* Chain */}
-            <div>
-              <div style={{ fontSize: "0.68rem", color: T.muted, letterSpacing: "0.08em", marginBottom: "8px" }}>THEATER CHAIN</div>
-              <select value={chain} onChange={e => { offerUndo(plan); setChain(e.target.value); setPlan([]); setExpandedId(null); setQuickSuggestions([]); setLockJustPicks([]); setLockFillGaps([]); showToast(plan.length > 0 ? "⛓️ Chain updated — plan cleared" : "⛓️ Chain updated"); }}
-                style={{ background: T.input, color: T.text, border: `1px solid ${T.inputBorder}`, borderRadius: "8px", padding: "8px 12px", fontSize: "0.9rem", cursor: "pointer", width: isMobile ? "100%" : "auto" }}>
-                {Object.keys(CHAIN_DATA).map(c => <option key={c}>{c}</option>)}
-              </select>
-              <div style={{ marginTop: "6px" }}>
-                <span style={{ fontSize: "0.78rem", color: "#f7971e", fontWeight: 700 }}>+{offset} min preshow</span>
-                {selectedTheater && (
-                  <div style={{ fontSize: "0.7rem", color: T.faint, marginTop: "2px" }}>auto-set from your theater</div>
-                )}
-                <div style={{ fontSize: "0.72rem", color: T.sub, marginTop: "3px", maxWidth: isMobile ? "100%" : "300px", lineHeight: "1.45" }}>📌 {CHAIN_DATA[chain]?.note ?? "Preshow estimate may vary — build in extra buffer if cutting it close"}</div>
+          <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: "14px", padding: "18px 20px", marginBottom: "14px" }}>
+
+            {/* Theater switcher chips — shown when live theaters are loaded */}
+            {usingLiveData && filteredTheaters.length > 0 && (
+              <div style={{ marginBottom: "18px" }}>
+                <div style={{ fontSize: "0.68rem", color: T.muted, letterSpacing: "0.08em", marginBottom: "8px" }}>NEARBY THEATERS</div>
+                <div style={{ display: "flex", gap: "8px", overflowX: "auto", paddingBottom: "4px", WebkitOverflowScrolling: "touch" }}>
+                  {filteredTheaters.map(t => (
+                    <button key={t.id} onClick={() => selectTheater(t)}
+                      style={{ padding: "7px 13px", borderRadius: "20px", border: `1px solid ${selectedTheater?.id === t.id ? "#f7971e" : T.inputBorder}`, background: selectedTheater?.id === t.id ? "#f7971e22" : T.input, color: selectedTheater?.id === t.id ? "#f7971e" : T.sub, cursor: "pointer", fontSize: "0.8rem", fontWeight: selectedTheater?.id === t.id ? 700 : 400, whiteSpace: "nowrap", flexShrink: 0, transition: "all 0.15s" }}>
+                      {t.name} <span style={{ opacity: 0.55, fontSize: "0.7rem" }}>{t.dist}mi</span>
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
-            {/* Buffer */}
-            <div>
-              <div style={{ fontSize: "0.68rem", color: T.muted, letterSpacing: "0.08em", marginBottom: "8px" }}>
-                PERSONAL BUFFER: <span style={{ color: "#ffd200" }}>{buffer === 0 ? "none" : `${buffer} min`}</span>
+            )}
+
+            {/* Sliders + credits row */}
+            <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", gap: isMobile ? "18px" : "28px", flexWrap: "wrap", alignItems: "flex-start" }}>
+
+              {/* Ads & Trailers (preshow offset) */}
+              <div>
+                <div style={{ fontSize: "0.68rem", color: T.muted, letterSpacing: "0.08em", marginBottom: "8px" }}>
+                  ADS & TRAILERS: <span style={{ color: "#f7971e", fontWeight: 700 }}>{preshowOffset} min</span>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  <span style={{ fontSize: "0.72rem", color: T.faint }}>5</span>
+                  <input type="range" min={5} max={35} step={1} value={preshowOffset} onChange={e => handlePreshowChange(Number(e.target.value))}
+                    style={{ width: isMobile ? "100%" : "130px", flex: isMobile ? 1 : "none", accentColor: "#f7971e", cursor: "pointer" }} />
+                  <span style={{ fontSize: "0.72rem", color: T.faint }}>35m</span>
+                </div>
+                <div style={{ fontSize: "0.7rem", color: T.muted, marginTop: "5px" }}>
+                  {selectedTheater ? `auto-set for ${selectedTheater.chain || selectedTheater.name}` : "time before movie actually starts"}
+                </div>
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                <span style={{ fontSize: "0.72rem", color: T.faint }}>0</span>
-                <input type="range" min={0} max={30} step={5} value={buffer} onChange={e => handleBufferChange(Number(e.target.value))}
-                  style={{ width: isMobile ? "100%" : "130px", flex: isMobile ? 1 : "none", accentColor: "#f7971e", cursor: "pointer" }} />
-                <span style={{ fontSize: "0.72rem", color: T.faint }}>30m</span>
+
+              {/* Personal buffer */}
+              <div>
+                <div style={{ fontSize: "0.68rem", color: T.muted, letterSpacing: "0.08em", marginBottom: "8px" }}>
+                  PERSONAL BUFFER: <span style={{ color: "#ffd200" }}>{buffer === 0 ? "none" : `${buffer} min`}</span>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  <span style={{ fontSize: "0.72rem", color: T.faint }}>0</span>
+                  <input type="range" min={0} max={30} step={5} value={buffer} onChange={e => handleBufferChange(Number(e.target.value))}
+                    style={{ width: isMobile ? "100%" : "130px", flex: isMobile ? 1 : "none", accentColor: "#f7971e", cursor: "pointer" }} />
+                  <span style={{ fontSize: "0.72rem", color: T.faint }}>30m</span>
+                </div>
+                <div style={{ fontSize: "0.7rem", color: T.muted, marginTop: "5px" }}>bathroom · snacks · walking</div>
               </div>
-              <div style={{ fontSize: "0.7rem", color: T.muted, marginTop: "5px" }}>bathroom · snacks · walking</div>
-            </div>
-            {/* Skip Credits */}
-            <div>
-              <div style={{ fontSize: "0.68rem", color: T.muted, letterSpacing: "0.08em", marginBottom: "8px" }}>CREDITS</div>
-              <button onClick={() => handleSkipCredits(!skipCredits)}
-                style={{ padding: "7px 16px", borderRadius: "20px", border: `1px solid ${skipCredits ? "#2ecc7177" : "#e67e2277"}`, background: skipCredits ? "#2ecc7118" : "#e67e2218", color: skipCredits ? "#2ecc71" : "#e67e22", cursor: "pointer", fontSize: "0.82rem", fontWeight: 700, transition: "all 0.2s" }}>
-                {skipCredits ? "✓ Skip Credits (−8 min)" : "⏳ Watch Full Credits"}
-              </button>
-              <div style={{ fontSize: "0.7rem", color: T.muted, marginTop: "5px" }}>
-                {skipCredits ? "More hopping options — leave before end" : "Fewer options but catch post-credits scenes"}
+
+              {/* Skip Credits */}
+              <div>
+                <div style={{ fontSize: "0.68rem", color: T.muted, letterSpacing: "0.08em", marginBottom: "8px" }}>CREDITS</div>
+                <button onClick={() => handleSkipCredits(!skipCredits)}
+                  style={{ padding: "7px 16px", borderRadius: "20px", border: `1px solid ${skipCredits ? "#2ecc7177" : "#e67e2277"}`, background: skipCredits ? "#2ecc7118" : "#e67e2218", color: skipCredits ? "#2ecc71" : "#e67e22", cursor: "pointer", fontSize: "0.82rem", fontWeight: 700, transition: "all 0.2s" }}>
+                  {skipCredits ? "✓ Skip Credits (−8 min)" : "⏳ Watch Full Credits"}
+                </button>
+                <div style={{ fontSize: "0.7rem", color: T.muted, marginTop: "5px" }}>
+                  {skipCredits ? "More hopping options — leave before end" : "Fewer options but catch post-credits scenes"}
+                </div>
               </div>
+
             </div>
           </div>
 
