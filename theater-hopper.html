@@ -1,0 +1,2358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Theater Hopper 🎬</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎬</text></svg>">
+
+  <!-- SEO + Social sharing -->
+  <meta name="description" content="Plan your perfect multi-movie day. Theater Hopper builds smart schedules around trailers, credits, and your personal buffer time." />
+  <meta property="og:title" content="Theater Hopper 🎬" />
+  <meta property="og:description" content="See more movies in one day. Smart scheduling around trailers, credits, and personal buffer time." />
+  <meta property="og:type" content="website" />
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:title" content="Theater Hopper 🎬" />
+  <meta name="twitter:description" content="Plan your perfect multi-movie day at the multiplex." />
+  <!-- TODO BEFORE LAUNCH: add og:image, og:url, twitter:image with a real preview image -->
+  <!-- NOTE: Babel standalone stays — it compiles JSX in-browser (no build step).
+       React + ReactDOM are already on production builds (~11KB + ~120KB vs ~130KB + ~1.1MB dev). -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', system-ui, sans-serif; }
+    select, button, input[type=range] { font-family: inherit; }
+    :root { --scroll-track: #10101c; --scroll-thumb: #2a2a40; }
+    [data-theme="light"] { --scroll-track: #e4e8f4; --scroll-thumb: #c0c4d8; }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: var(--scroll-track); }
+    ::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: 3px; }
+    @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useMemo } = React;
+
+    // ── Chain data ───────────────────────────────────────────────────────────
+    const CHAIN_DATA = {
+      "AMC":                { offset: 25, note: "Officially confirmed 25-30 min; CEO pledged to trim ~4-5 min" },
+      "Regal":              { offset: 25, note: "'The Twenty' preshow + trailers = ~25-30 min total" },
+      "Cinemark":           { offset: 20, note: "~15-20 min; slightly lighter than AMC/Regal" },
+      "Alamo Drafthouse":   { offset: 20, note: "No paid ads — curated clips instead. Movie starts ~20 min after listed time" },
+      "Harkins":            { offset: 20, note: "Reportedly lighter than AMC/Regal; ~20 min" },
+      "Marcus Theatres":    { offset: 22, note: "Similar to Regal/Cinemark; ~20-25 min" },
+      "Showcase Cinemas":   { offset: 22, note: "Uses NCM ads block; ~20-25 min" },
+      "iPic":               { offset: 12, note: "Premium/luxury dine-in; shorter preshow ~10-15 min" },
+      "Studio Movie Grill": { offset: 18, note: "Dine-in chain; ~15-20 min" },
+      "Flix Brewhouse":     { offset: 15, note: "Brewery dine-in; shorter preshow ~15 min" },
+      "Look Cinemas":       { offset: 18, note: "Southwest regional; ~15-20 min (estimated)" },
+      "LOOK Dine-In Cinemas": { offset: 18, note: "Dine-in chain; ~15-20 min (estimated)" },
+      "Santikos":           { offset: 18, note: "Texas regional; ~15-20 min (estimated)" },
+      "B&B Theatres":       { offset: 20, note: "Midwest regional; standard ~20 min" },
+      "Celebration Cinema": { offset: 13, note: "Their FAQ officially states 12-15 min" },
+      "Laemmle":            { offset: 15, note: "LA arthouse chain; minimal ads, ~12-15 min preshow" },
+      "Landmark Theatres":  { offset: 15, note: "Arthouse chain; lighter preshow ~12-15 min" },
+      "Moviehouse & Eatery":{ offset: 18, note: "Dine-in; ~15-20 min (estimated)" },
+      "Cinépolis":          { offset: 18, note: "Premium/dine-in; ~15-20 min (estimated)" },
+      "Galaxy Theatres":    { offset: 20, note: "Regional chain; standard ~20 min (estimated)" },
+      "Pacific Theatres":   { offset: 20, note: "West Coast regional; ~20 min (estimated)" },
+      "Regency Theatres":   { offset: 20, note: "CA regional; ~20 min (estimated)" },
+      "Bow Tie Cinemas":    { offset: 20, note: "Northeast regional; ~20 min (estimated)" },
+      "Carmike":            { offset: 20, note: "Now part of AMC; ~20-25 min" },
+      "Megaplex":           { offset: 15, note: "Utah regional; ~12-15 min, lighter preshow (estimated)" },
+      "Emagine":            { offset: 18, note: "Midwest premium; ~15-20 min (estimated)" },
+      "VSS Cinemas":        { offset: 20, note: "~20 min estimated" },
+      "TCL Chinese Theatres":{ offset: 20, note: "Hollywood landmark; standard ~20 min preshow" },
+      "El Capitan Theatre": { offset: 18, note: "Disney-operated Hollywood theater; ~15-20 min" },
+      "Egyptian Theater":   { offset: 15, note: "Arthouse/revival house; minimal ads ~15 min" },
+      "Veezi Theaters":     { offset: 15, note: "Independent theater; lighter preshow ~12-15 min (estimated)" },
+      "Independent":        { offset: 15, note: "Independent theater; preshow varies, typically ~12-15 min" },
+    };
+
+    // ── Demo theaters (real app queries a showtimes/geo API) ────────────────
+    const DEMO_THEATERS = [
+      { id: 1, name: "AMC Burbank 16",              chain: "AMC",              address: "125 E Palm Ave, Burbank, CA",          dist: 1.2  },
+      { id: 2, name: "Regal Edwards 26 & IMAX",     chain: "Regal",            address: "9500 Corbin Ave, Northridge, CA",      dist: 4.7  },
+      { id: 3, name: "Cinemark 18 & XD",            chain: "Cinemark",         address: "18050 Devonshire St, Northridge, CA",  dist: 6.1  },
+      { id: 4, name: "Alamo Drafthouse Burbank",    chain: "Alamo Drafthouse", address: "3800 W Alameda Ave, Burbank, CA",      dist: 7.9  },
+      { id: 5, name: "AMC Van Nuys 10",             chain: "AMC",              address: "15424 Ventura Blvd, Sherman Oaks, CA", dist: 9.4  },
+      { id: 6, name: "Harkins Theatres Vineyards",  chain: "Harkins",          address: "2501 N Main St, Palmdale, CA",         dist: 16.2 },
+      { id: 7, name: "iPic Pasadena",               chain: "iPic",             address: "336 E Colorado Blvd, Pasadena, CA",    dist: 19.8 },
+      { id: 8, name: "Marcus Theatres Orland Park", chain: "Marcus Theatres",  address: "16350 S LaGrange Rd, Orland Park, IL", dist: 24.1 },
+    ];
+
+    // ── Movies (demo data — replaced by live TMDB + Fandango data when PROXY_URL is set) ──
+    const DEMO_MOVIES = [
+      {
+        id: 1, title: "Thunderbolt", genre: "Action", rating: "PG-13", runtime: 118, emoji: "⚡", postCredits: true,
+        director: "Alex Reeves",
+        cast: ["Jordan Lee", "Sam Park", "Mia Torres"],
+        tmdbScore: "7.4",
+        trailerUrl: "https://www.youtube.com/results?search_query=thunderbolt+2025+movie+trailer",
+        synopsis: "A rogue meteorologist discovers a catastrophic storm system is being weaponized by a shadowy government agency — and she's the only one who can stop it.",
+      },
+      {
+        id: 2, title: "Lost in Time", genre: "Sci-Fi", rating: "PG", runtime: 95, emoji: "🕰️", postCredits: false,
+        director: "Priya Nair",
+        cast: ["Marcus Webb", "Diane Cho", "Elliot Stone"],
+        tmdbScore: "8.1",
+        trailerUrl: "https://www.youtube.com/results?search_query=lost+in+time+2025+movie+trailer",
+        synopsis: "When a grieving physicist accidentally sends himself back to 1987, he has 72 hours to fix the timeline before his own existence is erased.",
+      },
+      {
+        id: 3, title: "Dark Waters", genre: "Thriller", rating: "R", runtime: 142, emoji: "🌊", postCredits: false,
+        director: "Renata Voss",
+        cast: ["Cole Harmon", "Yuki Tanaka", "Brett Fallon"],
+        tmdbScore: "7.9",
+        trailerUrl: "https://www.youtube.com/results?search_query=dark+waters+2025+movie+trailer",
+        synopsis: "A deep-sea salvage crew uncovers a century-old wreck — and the classified secret it was carrying that someone will kill to keep buried.",
+      },
+      {
+        id: 4, title: "Comedy Night", genre: "Comedy", rating: "PG-13", runtime: 88, emoji: "😂", postCredits: false,
+        director: "Tommy Birch",
+        cast: ["Lena Ruiz", "Dev Kapoor", "Scarlett James"],
+        tmdbScore: "6.8",
+        trailerUrl: "https://www.youtube.com/results?search_query=comedy+night+2025+movie+trailer",
+        synopsis: "Three mismatched bridesmaids have 12 hours to pull off the perfect bachelorette party after everything that could go wrong does — spectacularly.",
+      },
+      {
+        id: 5, title: "The Last Stand", genre: "Drama", rating: "R", runtime: 156, emoji: "🎭", postCredits: true,
+        director: "Sofia Adler",
+        cast: ["Helen Grant", "Noah Osei", "Patricia Sung"],
+        tmdbScore: "8.6",
+        trailerUrl: "https://www.youtube.com/results?search_query=the+last+stand+2025+drama+trailer",
+        synopsis: "A retired public defender takes on one final case — her own, when she's accused of murdering the client she spent 20 years trying to free.",
+      },
+      {
+        id: 6, title: "Neon City", genre: "Action", rating: "PG-13", runtime: 110, emoji: "🌆", postCredits: false,
+        director: "James Wu",
+        cast: ["Ty Nakamura", "Rosa Vega", "Finn O'Brien"],
+        tmdbScore: "7.2",
+        trailerUrl: "https://www.youtube.com/results?search_query=neon+city+2025+movie+trailer",
+        synopsis: "In a near-future megalopolis, a street-level cop and a corporate hacker form an unlikely alliance to expose the algorithm controlling the city's crime.",
+      },
+    ];
+
+    // Demo showtimes in minutes-from-midnight (replaced by Fandango live data)
+    const DEMO_SHOWTIMES = {
+      1: [600, 780, 960, 1140],
+      2: [630, 765, 900, 1050],
+      3: [660, 840, 1050],
+      4: [600, 735, 870, 1005, 1140],
+      5: [600, 780, 990],
+      6: [690, 840, 990, 1140],
+    };
+
+    const CREDITS_ESTIMATE = 8;
+    const MAX_LOCK_ENTRIES = 3;
+    const COLORS = ["#e74c3c", "#3498db", "#16a085", "#e67e22", "#8e44ad", "#27ae60"];
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // CONFIG  ——  paste your Cloudflare Worker URL here before going live.
+    // Leave as "" to run in demo mode (no API calls made).
+    // ─────────────────────────────────────────────────────────────────────────
+    const PROXY_URL     = "https://theater-hopper.mr-steve-keyes.workers.dev";
+    const TMDB_IMG_BASE  = "https://image.tmdb.org/t/p/w154"; // w154 = sharp at 54–68px thumbnail, handles 2× retina
+    const TMDB_IMG_LARGE = "https://image.tmdb.org/t/p/w185"; // w185 = expanded panel poster (~90–100px wide at 2× retina)
+
+    // TMDB primary genre → emoji fallback (used when real movies lack an emoji field)
+    const GENRE_EMOJI = {
+      "Action": "💥", "Adventure": "🗺️", "Animation": "🎨", "Comedy": "😂",
+      "Crime": "🔍", "Documentary": "📽️", "Drama": "🎭", "Family": "👨‍👩‍👧‍👦",
+      "Fantasy": "🧙", "History": "📜", "Horror": "👻", "Music": "🎵",
+      "Mystery": "🕵️", "Romance": "💕", "Science Fiction": "🚀", "Thriller": "😱",
+      "TV Movie": "📺", "War": "⚔️", "Western": "🤠",
+    };
+
+    // TMDB movie IDs known to have post/mid-credits scenes — expand as new films release.
+    // Find TMDB IDs at: https://www.themoviedb.org/search?query=movie+title
+    const POST_CREDITS_IDS = new Set([
+      // MCU / Marvel (chronological)
+      299537, 299536, 299534, 429617, 524434, 497698, 566525, 453395, 616037, 505642,
+      634649, 848326, 640146, 969492, 579974, 533535, 822119, 976573, 986056, 986057,
+      // DC
+      774531, 698507, 245891, 1048499,
+      // Sony Spider-Verse
+      324857, 569094, 1124373,
+      // Sonic franchise
+      454626, 675353,
+      // Transformers / GI Joe
+      667538,
+      // Godzilla/Kong MonsterVerse
+      293167, 399566, 1234260,
+      // Other franchises known for post-credits
+      324786, // Kingsman: The Secret Service
+      // ↑ Add more: grab TMDB ID from the URL on themoviedb.org/movie/<id>
+    ]);
+
+    // Showtime format → badge label + accent color
+    // Any format not listed here gets a generic grey badge with truncated text.
+    const FORMAT_BADGES = {
+      "IMAX":                { label: "IMAX",   color: "#3498db" },
+      "IMAX 3D":             { label: "IMAX",   color: "#3498db" },
+      "Dolby Cinema":        { label: "DOLBY",  color: "#e74c3c" },
+      "Dolby Atmos":         { label: "ATMOS",  color: "#e74c3c" },
+      "Dolby":               { label: "DOLBY",  color: "#e74c3c" },
+      "RPX":                 { label: "RPX",    color: "#9b59b6" },
+      "4DX":                 { label: "4DX",    color: "#e67e22" },
+      "4DX 3D":              { label: "4DX",    color: "#e67e22" },
+      "ScreenX":             { label: "SCX",    color: "#27ae60" },
+      "D-BOX":               { label: "D-BOX",  color: "#f39c12" },
+      "PLF":                 { label: "PLF",    color: "#3498db" },
+      "BigD":                { label: "BIGD",   color: "#3498db" },
+      "UltraAVX":            { label: "UAVX",   color: "#3498db" },
+      "Prime at AMC":        { label: "PRIME",  color: "#f7971e" },
+      "Luxury Lounger":      { label: "LUXE",   color: "#8e44ad" },
+      "Dine-In":             { label: "DINE",   color: "#27ae60" },
+      "3D":                  { label: "3D",     color: "#7f8c8d" },
+      "LOOK PX":             { label: "PX",     color: "#9b59b6" },
+      "XL at AMC":           { label: "XL",     color: "#f7971e" },
+      "Laser at AMC":        { label: "LASER",  color: "#3498db" },
+    };
+
+    // Fandango amenity IDs that identify a premium format.
+    // Anything not in this map and not in IGNORE_AMENITY_IDS gets shown with its raw name.
+    const PREMIUM_AMENITY_IDS = {
+      1002: "IMAX",
+      1009: "3D",
+      1123: "Dolby Cinema",
+      1459: "LOOK PX",
+      1570: "XL at AMC",
+      1478: "Laser at AMC",
+      1124: "Dolby Atmos",
+      1017: "4DX",
+      1032: "ScreenX",
+      1054: "D-BOX",
+    };
+    // Amenity IDs that are seat/service features — never shown as a format badge.
+    const IGNORE_AMENITY_IDS = new Set([2011,1012,1071,1088,1283,2012,1029,1150,1354,1573,1003,1051,1028,1004]);
+
+    // Maps Fandango chain names → our CHAIN_DATA keys (adjust after seeing real API response)
+    const FANDANGO_CHAIN_MAP = {
+      "AMC Theatres": "AMC",    "AMC": "AMC",
+      "Regal":        "Regal",  "Regal Cinemas": "Regal",
+      "Cinemark":     "Cinemark", "Cinemark Theatres": "Cinemark",
+      "Alamo Drafthouse Cinema": "Alamo Drafthouse", "Alamo Drafthouse": "Alamo Drafthouse",
+      "Harkins Theatres": "Harkins",
+      "Marcus Theatres":  "Marcus Theatres",
+      "Showcase Cinemas": "Showcase Cinemas",
+      "iPic Theaters":    "iPic",
+      "Studio Movie Grill": "Studio Movie Grill",
+      "Flix Brewhouse":   "Flix Brewhouse",
+      "Laemmle Theatres": "Laemmle", "Laemmle": "Laemmle",
+      "Landmark":         "Landmark Theatres", "Landmark Theatres": "Landmark Theatres",
+      "Cinépolis USA":    "Cinépolis", "Cinépolis": "Cinépolis",
+      "Regency Theatres": "Regency Theatres",
+      "Pacific Theatres": "Pacific Theatres",
+      "Galaxy Theatres":  "Galaxy Theatres",
+      "Megaplex Theatres": "Megaplex", "Megaplex": "Megaplex",
+      "Emagine Entertainment": "Emagine",
+      "TCL Chinese Theatres": "TCL Chinese Theatres",
+      "Chinese Theatres": "TCL Chinese Theatres",
+      "El Capitan Theatre": "El Capitan Theatre",
+      "Egyptian Theater": "Egyptian Theater",
+      "Veezi Theaters":   "Veezi Theaters",
+      "RTSIND":           "Independent",
+    };
+
+    // ── Fandango response parser (confirmed against real API 2026-04-17) ──────
+    // Structure: theaters[].movies[].variants[].amenityGroups[].showtimes[].date
+    // Time format: "12:05p" / "2:30p" / "10:15a"
+    function parseFandangoResponse(raw) {
+      const theaterList = raw?.theaters || [];
+
+      return theaterList.map(t => {
+        const chainRaw = t.chainName || t.chainCode || "";
+        const chain    = FANDANGO_CHAIN_MAP[chainRaw] || chainRaw;
+        const dist     = Math.round((parseFloat(t.distance) || 0) * 10) / 10;
+        const address  = t.fullAddress
+          || [t.address1, t.city, t.state].filter(Boolean).join(", ");
+
+        const _movies = (t.movies || []).map(m => {
+          // Flatten showtimes from: variants → amenityGroups → showtimes
+          const showtimes = [];
+          for (const variant of (m.variants || [])) {
+            for (const ag of (variant.amenityGroups || [])) {
+              // Derive the real format name from amenity IDs.
+              // filmFormatHeader is only "Standard" / "Premium Format" / "3D" — not specific.
+              // The actual format (IMAX, Dolby Cinema, etc.) lives in ag.amenities[n].id / .name.
+              let format = "Standard";
+              const amenities = ag.amenities || [];
+              // First pass: look for a known premium amenity ID
+              const premiumMatch = amenities.find(a => PREMIUM_AMENITY_IDS[a.id]);
+              if (premiumMatch) {
+                format = PREMIUM_AMENITY_IDS[premiumMatch.id];
+              } else if (variant.filmFormatHeader === "3D") {
+                format = "3D";
+              } else if (variant.filmFormatHeader === "Premium Format") {
+                // Unknown premium format — use first non-ignored amenity name as fallback
+                const named = amenities.find(a => !IGNORE_AMENITY_IDS.has(a.id) && a.name);
+                if (named) format = named.name;
+              }
+
+              for (const st of (ag.showtimes || [])) {
+                showtimes.push({
+                  time:   st.date,   // "12:05p"
+                  format,
+                });
+              }
+            }
+          }
+          return {
+            // Normalize ID to number so strict === comparisons work regardless of API type
+            id:       typeof m.id === "number" ? m.id : (parseInt(m.id, 10) || m.id),
+            title:    m.title   || "Unknown",
+            rating:   m.rating  || "NR",
+            runtime:  m.runtime ? parseInt(m.runtime, 10) : null,
+            // Try every field name Fandango is known to use for the poster image
+            poster:   m.poster || m.posterUrl || m.posterImage || m.imageUrl || m.artSmall || m.posterArtUrl || m.thumbnailUrl || null,
+            genres:   m.genres  || [],
+            showtimes,
+          };
+        });
+
+        return {
+          id:      t.formattedID || t.id || String(Math.random()),
+          name:    t.name || "Unknown Theater",
+          chain,
+          address,
+          dist,
+          _movies,
+        };
+      });
+    }
+
+    // Fandango genre strings → emoji (supplements TMDB GENRE_EMOJI)
+    const FANDANGO_GENRE_EMOJI = {
+      "Action/Adventure": "💥", "Sci-Fi/Fantasy": "🚀", "Drama": "🎭",
+      "Comedy": "😂", "Horror": "👻", "Romance": "💕", "Thriller": "😱",
+      "Mystery & Suspense": "🕵️", "Animation": "🎨", "Documentary": "📽️",
+      "Family": "👨‍👩‍👧‍👦", "Kids & Family": "👨‍👩‍👧‍👦", "Musical": "🎵", "Western": "🤠",
+      "Concert/Performance": "🎤", "Sports": "🏆",
+    };
+    function emojiFromFandangoGenres(genres) {
+      for (const g of (genres || [])) {
+        if (FANDANGO_GENRE_EMOJI[g]) return FANDANGO_GENRE_EMOJI[g];
+      }
+      return "🎬";
+    }
+
+    // ── Mystery / Secret screening events ───────────────────────────────────
+    // Ordered most-specific first so the first match wins.
+    // pattern: regex matched against the Fandango movie title (case-insensitive).
+    // runtime: estimated average (min) used for scheduling when Fandango omits it.
+    const MYSTERY_EVENTS = [
+      // ── AMC ──────────────────────────────────────────────────────────────
+      {
+        // Fandango titles: "AMC Scream Unseen: April 6", "AMC Scream Unseen: January 5", etc.
+        // Must be checked BEFORE screen-unseen so "Scream" doesn't get swallowed by "Screen".
+        pattern: /scream\s*unseen/i,
+        chain: "AMC",
+        title: "AMC Scream Unseen",
+        emoji: "👻",
+        genre: "Horror · Mystery Screening",
+        rating: "R (expected)",
+        runtime: 110,
+        synopsis: "AMC's horror-focused secret screening — the title stays hidden until you're in your seat. Past Scream Unseen picks have spanned studio horror releases and festival favorites. Count on something scary.",
+        trailerUrl: "https://www.amctheatres.com/events/amc-screen-unseen",
+      },
+      {
+        // Fandango titles: "AMC Screen Unseen: February 9", "AMC Screen Unseen: March", etc.
+        pattern: /screen\s*unseen/i,
+        chain: "AMC",
+        title: "AMC Screen Unseen",
+        emoji: "🎭",
+        genre: "Mystery Screening",
+        rating: "TBD",
+        runtime: 120,
+        synopsis: "AMC's surprise movie event — the title is revealed only after you sit down. Past Screen Unseen picks have ranged from indie darlings to wide studio releases across all genres. The MPAA rating is typically shared ahead of time.",
+        trailerUrl: "https://www.amctheatres.com/events/amc-screen-unseen",
+      },
+
+      // ── Regal ────────────────────────────────────────────────────────────
+      {
+        // Regal site title: "Monday Mystery Movie: Horror Edition (3/30)"
+        // Fandango may list as "REGAL: Monday Mystery Movie" with date suffix.
+        pattern: /monday\s*mystery.*horror|mystery.*movie.*horror\s*edition/i,
+        chain: "Regal",
+        title: "Regal Monday Mystery Movie: Horror Edition",
+        emoji: "👻",
+        genre: "Horror · Mystery Screening",
+        rating: "R (expected)",
+        runtime: 105,
+        synopsis: "Regal's horror-flavored twist on Mystery Movie Monday. The film stays secret until the credits roll — expect something scary. Occasionally runs as a 'Choose Your Fate' double-feature where two rooms show two different horror films.",
+        trailerUrl: "https://www.regmovies.com/mystery-movies",
+      },
+      {
+        // Fandango title: "REGAL: Monday Mystery Movie"
+        pattern: /regal.*monday\s*mystery|monday\s*mystery\s*movie/i,
+        chain: "Regal",
+        title: "Regal Monday Mystery Movie",
+        emoji: "🎟️",
+        genre: "Mystery Screening",
+        rating: "TBD",
+        runtime: 115,
+        synopsis: "Regal's $5 secret screening held on select Mondays — an early advance look at an upcoming wide release whose title isn't revealed until showtime. Expect mainstream studio films across any genre.",
+        trailerUrl: "https://www.regmovies.com/mystery-movies",
+      },
+
+      // ── Cinemark ─────────────────────────────────────────────────────────
+      {
+        // Fandango title: "Cinemark Secret Movie Series"
+        pattern: /cinemark\s*secret\s*movie/i,
+        chain: "Cinemark",
+        title: "Cinemark Secret Movie Series",
+        emoji: "🎟️",
+        genre: "Mystery Screening",
+        rating: "TBD",
+        runtime: 115,
+        synopsis: "Cinemark's monthly $5 mystery event — the title is completely secret until the opening credits roll. Past picks have included major upcoming releases across all genres, typically shown before their wide release date.",
+        trailerUrl: "https://www.cinemark.com/movies/secret-movie-series-january-5",
+      },
+
+      // ── Harkins ──────────────────────────────────────────────────────────
+      {
+        // Harkins site + Fandango: "Harkins Secret Cinema"
+        pattern: /harkins\s*secret\s*cinema/i,
+        chain: "Harkins",
+        title: "Harkins Secret Cinema",
+        emoji: "🎟️",
+        genre: "Mystery Screening",
+        rating: "TBD",
+        runtime: 115,
+        synopsis: "Harkins' $6 secret screening series — see a new movie before its wide release without knowing the title. Held at select Arizona and regional locations. Genre is sometimes hinted at ahead of time.",
+        trailerUrl: "https://harkins.com/events-and-series/harkins-secret-cinema",
+      },
+
+      // ── Megaplex ─────────────────────────────────────────────────────────
+      {
+        // Fandango title: "Megaplex Secret Cinema"
+        pattern: /megaplex\s*secret\s*cinema/i,
+        chain: "Megaplex",
+        title: "Megaplex Secret Cinema",
+        emoji: "🎟️",
+        genre: "Mystery Screening",
+        rating: "TBD",
+        runtime: 115,
+        synopsis: "Megaplex's $5 secret screening — the first Utah chain to run a mystery movie program. The movie title stays hidden until showtime; the MPAA rating (e.g. PG-13) is typically disclosed in advance. Primarily at Utah locations.",
+        trailerUrl: "https://www.megaplextheatres.com",
+      },
+
+      // ── Marcus ───────────────────────────────────────────────────────────
+      {
+        // Marcus site: "Marcus Mystery Movie"
+        pattern: /marcus\s*mystery\s*movie/i,
+        chain: "Marcus Theatres",
+        title: "Marcus Mystery Movie",
+        emoji: "🎟️",
+        genre: "Mystery Screening",
+        rating: "TBD",
+        runtime: 115,
+        synopsis: "Marcus Theatres' mystery screening series — an advance look at an upcoming release at a discounted price, with the title kept secret until the film begins. Available at select Marcus locations.",
+        trailerUrl: "https://www.marcustheatres.com/marcus-specials/marcus-film-series/marcus-mystery-movie",
+      },
+
+      // ── Alamo Drafthouse ─────────────────────────────────────────────────
+      {
+        // Fandango title: "Alamo Drafthouse Mystery Machine"
+        pattern: /alamo.*mystery\s*machine|mystery\s*machine/i,
+        chain: "Alamo Drafthouse",
+        title: "Alamo Drafthouse Mystery Machine",
+        emoji: "🎟️",
+        genre: "Mystery Screening",
+        rating: "TBD",
+        runtime: 120,
+        synopsis: "Alamo's curated mystery screening — the host reveals the film to the crowd only after everyone is seated. Spans genres, countries, and eras; past picks have included arthouse, cult classics, and new releases.",
+        trailerUrl: "https://drafthouse.com",
+      },
+      {
+        // Alamo Film Club Secret Screening, AGFA Secret Screenings, Secret Screening #666, etc.
+        // Fandango title: "Secret Screening" or "Alamo Drafthouse Secret Screening"
+        pattern: /alamo.*secret\s*screening|secret\s*screening.*alamo/i,
+        chain: "Alamo Drafthouse",
+        title: "Alamo Drafthouse Secret Screening",
+        emoji: "🎭",
+        genre: "Mystery Screening",
+        rating: "TBD",
+        runtime: 120,
+        synopsis: "A themed mystery marathon or one-off secret screening at Alamo Drafthouse — the host introduces the film(s) live. Can be anything from new releases to cult classics, often organized around a surprise theme.",
+        trailerUrl: "https://drafthouse.com/show/film-club-secret-screening",
+      },
+
+      // ── Generic / Look Cinemas / other chains ────────────────────────────
+      {
+        // Fandango generic listing: "Mystery Movie" (ID 56573, used by Look Cinemas + others)
+        // Also catches "Secret Screening" titles not matched above.
+        pattern: /^(mystery\s*movie|secret\s*screening|secret\s*movie|unknown\s*movie)$/i,
+        chain: null,
+        title: "Mystery Screening",
+        emoji: "🎟️",
+        genre: "Mystery Screening",
+        rating: "TBD",
+        runtime: 115,
+        synopsis: "A secret screening where the movie title isn't revealed until showtime. Could be a studio advance screening, a returning classic, or a surprise indie — part of the fun is not knowing. Check your theater's website for any rating or genre hints.",
+        trailerUrl: null,
+      },
+
+      // ── Fathom / Special Events ───────────────────────────────────────────
+      {
+        pattern: /fathom\s*events?/i,
+        chain: null,
+        title: "Fathom Event",
+        emoji: "⭐",
+        genre: "Special Event",
+        rating: "TBD",
+        runtime: 130,
+        synopsis: "A Fathom Events limited theatrical screening — could be an anniversary re-release, concert film, classic revival, anime film, or sports broadcast. Check Fathom's site for the specific title and details.",
+        trailerUrl: "https://www.fathomevents.com",
+      },
+    ];
+
+    /** Returns a MYSTERY_EVENTS entry if the title matches, otherwise null. */
+    function detectMysteryEvent(title) {
+      if (!title) return null;
+      return MYSTERY_EVENTS.find(e => e.pattern.test(title)) || null;
+    }
+
+    // ── Showtime string → minutes from midnight ───────────────────────────────
+    function parseShowtime(timeStr) {
+      if (timeStr == null) return null;
+      if (typeof timeStr === "number") return timeStr;
+      const s = String(timeStr).trim();
+      // Fandango format: "12:05p" / "2:30p" / "10:15a" (not standard AM/PM)
+      const mFan = s.match(/^(\d{1,2}):(\d{2})(a|p)$/i);
+      if (mFan) {
+        let h = parseInt(mFan[1], 10), m = parseInt(mFan[2], 10);
+        if (mFan[3].toLowerCase() === "p" && h !== 12) h += 12;
+        if (mFan[3].toLowerCase() === "a" && h === 12) h = 0;
+        return h * 60 + m;
+      }
+      // Standard "10:30 AM" / "10:30 PM"
+      const m12 = s.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+      if (m12) {
+        let h = parseInt(m12[1], 10), m = parseInt(m12[2], 10);
+        if (m12[3].toUpperCase() === "PM" && h !== 12) h += 12;
+        if (m12[3].toUpperCase() === "AM" && h === 12) h = 0;
+        return h * 60 + m;
+      }
+      // "10:30" 24-hr
+      const m24 = s.match(/^(\d{1,2}):(\d{2})$/);
+      if (m24) return parseInt(m24[1], 10) * 60 + parseInt(m24[2], 10);
+      // ISO timestamp
+      if (s.includes("T")) {
+        const d = new Date(s);
+        if (!isNaN(d)) return d.getHours() * 60 + d.getMinutes();
+      }
+      return null;
+    }
+
+    // ── Build showtimes map  { movieId → [minutes, ...] } ────────────────────
+    function buildShowtimesMap(fmList) {
+      const out = {};
+      fmList.forEach(fm => {
+        const times = (fm.showtimes || [])
+          .map(s => parseShowtime(s.time || s.startTime || s))
+          .filter(t => t !== null)
+          .sort((a, b) => a - b);
+        out[fm.id] = [...new Set(times)];
+      });
+      return out;
+    }
+
+    // Builds { movieId: { posted: formatString } } — only non-Standard formats are stored.
+    // Format string is resolved in parseFandangoTheaters via PREMIUM_AMENITY_IDS lookup.
+    function buildFormatsMap(fmList) {
+      const out = {};
+      fmList.forEach(fm => {
+        out[fm.id] = {};
+        (fm.showtimes || []).forEach(s => {
+          const posted = parseShowtime(s.time || s.startTime || s);
+          if (posted === null) return;
+          const fmt = s.format;
+          if (!fmt || fmt === "Standard") return;
+          if (!out[fm.id][posted]) out[fm.id][posted] = fmt; // keep first non-Standard seen
+        });
+      });
+      return out;
+    }
+
+    // ── Enrich basic movie list with TMDB metadata (async) ───────────────────
+    // Returns { movies: enrichedArray, keyMissing: bool }
+    async function enrichWithTmdb(basicMovies, proxyUrl) {
+      let keyMissing = false;
+      const movies = await Promise.all(
+        basicMovies.map(async (m) => {
+          // Mystery/secret screenings: no TMDB lookup — keep pre-filled filler data
+          if (m.isMystery) return m;
+          // Cache hit — same Fandango movie ID seen before this session (e.g. date change on same theater)
+          const cached = TMDB_CACHE.get(m.id);
+          if (cached) return { ...m, ...cached };
+          try {
+            // Fandango appends "(2025)" / "(2026)" to titles — strip before TMDB search
+            const yearMatch = m.title.match(/\((\d{4})\)\s*$/);
+            const cleanTitle = m.title.replace(/\s*\(\d{4}\)\s*$/, "").trim();
+            const year = yearMatch ? yearMatch[1] : null;
+
+            const sqParams = { query: cleanTitle, language: "en-US", page: "1" };
+            if (year) sqParams.year = year;
+            const sq = new URLSearchParams(sqParams);
+            const sr = await fetch(`${proxyUrl}/tmdb/search/movie?${sq}`);
+            const sd = await sr.json();
+            // Surface worker-level errors (e.g. TMDB_API_KEY not configured)
+            if (!sr.ok) {
+              console.warn("[TH] TMDB search HTTP", sr.status, "for", m.title, "—", sd?.error || "unknown error");
+              if (sd?.error?.includes("not configured")) keyMissing = true;
+              return m;
+            }
+            // Pick the best result: prefer year match, then fall back to top result
+            let hit = null;
+            if (year) {
+              hit = (sd.results || []).find(r => r.release_date?.startsWith(year));
+            }
+            hit = hit || sd.results?.[0];
+            // If still nothing with year, retry without year constraint
+            if (!hit && year) {
+              const sq2 = new URLSearchParams({ query: cleanTitle, language: "en-US", page: "1" });
+              const sr2 = await fetch(`${proxyUrl}/tmdb/search/movie?${sq2}`);
+              const sd2 = await sr2.json();
+              hit = sd2.results?.[0];
+            }
+            if (!hit) return m; // no TMDB match — keep basic info
+
+            const dr = await fetch(`${proxyUrl}/tmdb/movie/${hit.id}?append_to_response=credits`);
+            const d  = await dr.json();
+            if (!dr.ok) {
+              console.warn("[TH] TMDB detail HTTP", dr.status, "for", m.title, "—", d?.error || "unknown error");
+              return m;
+            }
+
+            const primaryGenre = d.genres?.[0]?.name || "";
+            // trailerUrl starts as YouTube search — upgraded lazily to a direct link when synopsis is opened
+            const trailerUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent((d.title || m.title) + " official trailer")}`;
+            const enrichment = {
+              title:      d.title || m.title,
+              genre:      d.genres?.map(g => g.name).join(", ") || m.genre,
+              runtime:    d.runtime  || m.runtime || 120,
+              emoji:      GENRE_EMOJI[primaryGenre] || "🎬",
+              postCredits:POST_CREDITS_IDS.has(d.id),
+              director:   d.credits?.crew?.find(c => c.job === "Director")?.name || "",
+              cast:       d.credits?.cast?.slice(0, 3).map(c => c.name) || [],
+              tmdbScore:  d.vote_average ? d.vote_average.toFixed(1) : "?",
+              posterPath: d.poster_path || null,
+              synopsis:   d.overview   || "",
+              trailerUrl,
+              _tmdbId:    d.id,
+            };
+            TMDB_CACHE.set(m.id, enrichment); // store for this session
+            return { ...m, ...enrichment };
+          } catch (e) {
+            console.warn("[TH] TMDB fetch failed for", m.title, "—", e.message);
+            return m; // graceful fallback: keep basic info
+          }
+        })
+      );
+      return { movies, keyMissing };
+    }
+
+
+    // ── Utilities ────────────────────────────────────────────────────────────
+    function toTime(min) {
+      const h = Math.floor(min / 60), m = min % 60;
+      const ampm = h >= 12 ? "PM" : "AM";
+      const hour = h > 12 ? h - 12 : h === 0 ? 12 : h;
+      return `${hour}:${m.toString().padStart(2, "0")} ${ampm}`;
+    }
+    function toDuration(min) {
+      const h = Math.floor(min / 60), m = min % 60;
+      if (h === 0) return `${m}m`;
+      return m === 0 ? `${h}h` : `${h}h ${m}m`;
+    }
+    function colorOf(id) { return COLORS[(id - 1) % COLORS.length]; }
+
+    function gapColor(g) { return g < 5 ? "#e74c3c" : g < 15 ? "#f39c12" : "#2ecc71"; }
+    function gapEmoji(g) { return g < 5 ? "⚠️" : g < 15 ? "🟡" : "✅"; }
+
+    const DAY_START = 9 * 60, DAY_END = 23 * 60, DAY_DUR = DAY_END - DAY_START;
+    const pct      = (m) => `${Math.max(0, Math.min(100, ((m - DAY_START) / DAY_DUR) * 100))}%`;
+    const widthPct = (m) => `${Math.max(0, (m / DAY_DUR) * 100)}%`;
+
+    function getDateOptions() {
+      return Array.from({ length: 7 }, (_, i) => {
+        const d = new Date(); d.setDate(d.getDate() + i);
+        return {
+          label: i === 0 ? "Today" : i === 1 ? "Tomorrow"
+            : d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }),
+          isToday: i === 0,
+          dateStr: d.toDateString(), // e.g. "Sat Apr 19 2026" — used for persistence + midnight detection
+        };
+      });
+    }
+    function getNowMinutes() { const n = new Date(); return n.getHours() * 60 + n.getMinutes(); }
+
+    function makeTheme(mode) {
+      const dk = mode === "dark";
+      return {
+        bg:           dk ? "#080810" : "#f0f2f8",
+        card:         dk ? "#10101c" : "#ffffff",
+        cardBorder:   dk ? "#1e1e30" : "#e0e4f0",
+        input:        dk ? "#1a1a28" : "#eef0f8",
+        inputBorder:  dk ? "#2a2a40" : "#d0d4e8",
+        text:         dk ? "#ffffff" : "#1a1a2e",
+        sub:          dk ? "#bbb"    : "#444",
+        muted:        dk ? "#999"    : "#555",
+        faint:        dk ? "#888"    : "#777",
+        timeline:     dk ? "#060609" : "#e4e8f4",
+        timelineLine: dk ? "#191926" : "#d0d4e8",
+        timelineText: dk ? "#777"    : "#999",
+        tagBg:        dk ? "#080810" : "#eef0f8",
+        dashed:       dk ? "#2a2a40" : "#c8cce0",
+        hint:         dk ? "#777"    : "#999",
+        synopsisBg:   dk ? "#0d0d1a" : "#eef0f8",
+        planBg:       dk ? "#0d0d1a" : "#f8f9ff",
+        warnBg:       dk ? "#e74c3c18" : "#fff0f0",
+        warnBorder:   dk ? "#e74c3c44" : "#f5c0c0",
+      };
+    }
+
+    // ── Shared suggestion card list ──────────────────────────────────────────
+    function SuggestionList({ items, T, realStart, effectiveEnd, loadPlan, cardAccent, isMobile, movies }) {
+      return (
+        <div style={{ display: "flex", gap: "12px", flexWrap: "wrap" }}>
+          {items.map((item, idx) => (
+            <button key={idx} onClick={() => loadPlan(item.combo)}
+              style={{ background: T.card, border: `1px solid ${cardAccent ? cardAccent + "55" : T.cardBorder}`, borderRadius: "10px", padding: "14px 16px", cursor: "pointer", textAlign: "left", minWidth: isMobile ? "100%" : "210px", transition: "border-color 0.15s" }}
+              onMouseEnter={e => e.currentTarget.style.borderColor = cardAccent || "#f7971e"}
+              onMouseLeave={e => e.currentTarget.style.borderColor = cardAccent ? cardAccent + "55" : T.cardBorder}>
+              <div style={{ fontSize: "0.82rem", fontWeight: 700, color: T.text, marginBottom: "8px" }}>
+                Option {idx + 1} &nbsp;·&nbsp; {item.movieCount} movies &nbsp;·&nbsp; {toDuration(item.totalTime)}
+              </div>
+              {item.combo.map((s, i) => {
+                const movie = movies.find(m => m.id === s.movieId);
+                const gap   = i > 0 ? realStart(s.posted) - effectiveEnd(item.combo[i-1].movieId, item.combo[i-1].posted) : null;
+                return (
+                  <React.Fragment key={i}>
+                    {gap !== null && (
+                      <div style={{ fontSize: "0.68rem", color: gapColor(gap), paddingLeft: "14px", margin: "2px 0" }}>
+                        {gapEmoji(gap)} {toDuration(gap)} gap
+                      </div>
+                    )}
+                    <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "0.78rem", color: T.sub }}>
+                      <div style={{ width: "8px", height: "8px", borderRadius: "2px", background: colorOf(s.movieId), flexShrink: 0 }} />
+                      {movie.emoji} {movie.title}
+                      <span style={{ color: T.muted, marginLeft: "auto" }}>{toTime(realStart(s.posted))}</span>
+                    </div>
+                  </React.Fragment>
+                );
+              })}
+              <div style={{ fontSize: "0.7rem", color: T.muted, marginTop: "8px", borderTop: `1px solid ${T.cardBorder}`, paddingTop: "6px" }}>
+                {toDuration(item.totalGap)} total gap · click to load
+              </div>
+            </button>
+          ))}
+        </div>
+      );
+    }
+
+    // ── TMDB metadata cache ──────────────────────────────────────────────────
+    // Keyed by Fandango movie ID. Persists for the browser session.
+    // Benefit: changing the date on the same theater re-uses cached TMDB data
+    // (same movies, same Fandango IDs) → zero extra API calls.
+    const TMDB_CACHE = new Map();
+
+    // ── Clipboard helpers (with execCommand fallback for HTTP / file://) ────
+    function legacyCopy(text) {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.cssText = 'position:fixed;opacity:0;pointer-events:none;top:0;left:0';
+      document.body.appendChild(ta);
+      ta.focus(); ta.select();
+      try { document.execCommand('copy'); } catch {}
+      document.body.removeChild(ta);
+    }
+    function copyToClipboard(text, onSuccess) {
+      if (navigator.clipboard?.writeText) {
+        navigator.clipboard.writeText(text).then(onSuccess).catch(() => { legacyCopy(text); onSuccess(); });
+      } else {
+        legacyCopy(text); onSuccess();
+      }
+    }
+
+    // ── Combo Web Worker ─────────────────────────────────────────────────────
+    // generateAllCombos + generateJustPicksCombos run off the main thread so
+    // the UI never freezes on large multiplexes.  Serialised as a string so
+    // this stays a single-file app — no build step needed.
+    const COMBO_WORKER_CODE = `
+      const CAP = 500;
+      const realStart = (p, offset) => p + offset;
+      const effectiveEnd = (movieId, p, runtimes, offset, skipCredits, ce) =>
+        realStart(p, offset) + (runtimes[movieId] || 120) - (skipCredits ? ce : 0);
+
+      function generateAllCombos(screenings, buffer, offset, runtimes, skipCredits, ce) {
+        const results = [];
+        function bt(cur) {
+          if (results.length >= CAP) return;
+          if (cur.length >= 2) results.push([...cur]);
+          if (cur.length >= 4) return;
+          const last = cur[cur.length - 1];
+          const end  = effectiveEnd(last.movieId, last.posted, runtimes, offset, skipCredits, ce);
+          for (const s of screenings) {
+            if (results.length >= CAP) break;
+            if (cur.some(c => c.movieId === s.movieId)) continue;
+            if (realStart(s.posted, offset) >= end + buffer) { cur.push(s); bt(cur); cur.pop(); }
+          }
+        }
+        screenings.forEach(s => { if (results.length < CAP) bt([s]); });
+        return results;
+      }
+
+      function permutations(arr) {
+        if (arr.length <= 1) return [[...arr]];
+        return arr.flatMap((v, i) =>
+          permutations([...arr.slice(0, i), ...arr.slice(i + 1)]).map(p => [v, ...p])
+        );
+      }
+
+      function generateJustPicksCombos(lockMovieIds, lockEntries, lockScreenings, buffer, offset, runtimes, skipCredits, ce) {
+        const perms   = permutations(lockMovieIds);
+        const results = [];
+        for (const perm of perms) {
+          (function bt(idx, current, lastEnd) {
+            if (idx === perm.length) {
+              if (current.length >= 2) results.push([...current]);
+              return;
+            }
+            const mid   = perm[idx];
+            const entry = lockEntries.find(e => Number(e.movieId) === mid);
+            const times = entry && entry.showtime ? [Number(entry.showtime)] : (lockScreenings[mid] || []);
+            for (const posted of times) {
+              if (idx === 0 || realStart(posted, offset) >= lastEnd + buffer) {
+                current.push({ movieId: mid, posted });
+                bt(idx + 1, current, effectiveEnd(mid, posted, runtimes, offset, skipCredits, ce));
+                current.pop();
+              }
+            }
+          })(0, [], 0);
+        }
+        return results;
+      }
+
+      self.onmessage = function({ data }) {
+        const { id, screenings, buffer, offset, runtimes, skipCredits, ce,
+                lockMovieIds, lockEntries, lockScreenings } = data;
+        const allCombos = generateAllCombos(screenings, buffer, offset, runtimes, skipCredits, ce);
+        const justPicksCombos = (lockMovieIds && lockMovieIds.length >= 2)
+          ? generateJustPicksCombos(lockMovieIds, lockEntries, lockScreenings, buffer, offset, runtimes, skipCredits, ce)
+          : null;
+        self.postMessage({ id, allCombos, justPicksCombos });
+      };
+    `;
+
+    // ── localStorage helpers ─────────────────────────────────────────────────
+    function fromStorage(key, fallback) {
+      try { const v = localStorage.getItem(key); return v !== null ? JSON.parse(v) : fallback; }
+      catch { return fallback; }
+    }
+    function toStorage(key, value) {
+      try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
+    }
+
+    // ── App ──────────────────────────────────────────────────────────────────
+    function App() {
+      const [chain,       setChain]       = useState(() => fromStorage('th_chain', "AMC"));
+      const [buffer,      setBuffer]      = useState(() => fromStorage('th_buffer', 10));
+      const [plan,        setPlan]        = useState(() => {
+        // Only restore plan if it was saved today — stale plans from other days are discarded
+        const savedDate = fromStorage('th_savedDate', null);
+        const today = new Date().toDateString();
+        return savedDate === today ? fromStorage('th_plan', []) : [];
+      });
+      const [dateIdx,     setDateIdx]     = useState(() => {
+        // Restore the selected date by matching the saved date string against today's options
+        const savedDateStr = fromStorage('th_selectedDateStr', null);
+        if (!savedDateStr) return 0;
+        const opts = getDateOptions();
+        const idx = opts.findIndex(d => d.dateStr === savedDateStr);
+        return idx >= 0 ? idx : 0;
+      });
+      const [skipCredits, setSkipCredits] = useState(() => fromStorage('th_skipCredits', true));
+      const [theme,       setTheme]       = useState(() => fromStorage('th_theme', "dark"));
+      const [planOpen,    setPlanOpen]    = useState(false);
+      const [planMode,    setPlanMode]    = useState(() => fromStorage('th_planMode', "quick"));
+      const [quickPreset,    setQuickPreset]    = useState(null);
+      const [quickSuggestions, setQuickSuggestions] = useState([]);   // Quick Plans results
+      const [lockJustPicks,  setLockJustPicks]  = useState([]);       // Lock In: just picked movies
+      const [lockFillGaps,   setLockFillGaps]   = useState([]);       // Lock In: picked + extras
+      const [noComboMsg,     setNoComboMsg]      = useState("");
+      // Lock In entries: array of { movieId: "", showtime: "" }
+      const [lockEntries,  setLockEntries]  = useState(() => fromStorage('th_lockEntries', [{ movieId: "", showtime: "" }]));
+      const [excludedIds,  setExcludedIds]  = useState(() => fromStorage('th_excludedIds', []));
+      const [expandedId,   setExpandedId]   = useState(null);
+      const [copied,      setCopied]      = useState(false);
+      const [toast,       setToast]       = useState("");
+      const [undoPlan,    setUndoPlan]    = useState(null);  // saved plan for undo
+      const undoTimerRef         = React.useRef(null);
+      const fetchTimerRef        = React.useRef(null);
+      const planRegenTimerRef    = React.useRef(null);    // debounces auto-regen when buffer/credits changes
+      const movieGenRef          = React.useRef(0);       // incremented each theater/date load — guards stale TMDB enrichments
+      const selectedTheaterRef   = React.useRef(null);   // mirrors selectedTheater without causing effect re-fires
+      const handleQuickPlanRef   = React.useRef(null);   // always-current ref so debounced timer isn't a stale closure
+      const handleLockInRef      = React.useRef(null);
+      const pendingHashPlanRef   = React.useRef(null);   // shared-URL plan entries waiting for movies to load
+      const comboWorkerRef       = React.useRef(null);   // Web Worker instance for combo generation
+      const comboReqIdRef        = React.useRef(0);      // increments each request; stale responses are discarded
+      const onComboResultRef     = React.useRef(null);   // { id, fn } — callback for current pending worker result
+      const [selectedTheater,  setSelectedTheater]  = useState(() => fromStorage('th_selectedTheater', null));
+      const [theaterOpen,      setTheaterOpen]      = useState(() => !fromStorage('th_selectedTheater', null));
+      const [theaterQuery,     setTheaterQuery]     = useState(() => fromStorage('th_theaterQuery', ""));
+      const [theaterRadius,    setTheaterRadius]    = useState(() => fromStorage('th_theaterRadius', 10));
+      const [geoLoading,       setGeoLoading]       = useState(false);
+      const [windowWidth,      setWindowWidth]      = useState(window.innerWidth);
+      const [todayStr,         setTodayStr]         = useState(() => new Date().toDateString());
+
+      // ── Live data state ───────────────────────────────────────────────────────
+      const [movies,          setMovies]          = useState([]);
+      const [showtimes,       setShowtimes]       = useState({});
+      const [formats,         setFormats]         = useState({});   // { movieId: { posted: formatString } }
+      const [theaters,        setTheaters]        = useState([]);
+      const [usingLiveData,   setUsingLiveData]   = useState(false);
+      const [isLoadingData,   setIsLoadingData]   = useState(false);   // fetching theater list
+      const [isLoadingMeta,   setIsLoadingMeta]   = useState(false);   // enriching with TMDB
+      const [isPlanning,      setIsPlanning]      = useState(false);   // combo worker running
+      const [tmdbKeyError,    setTmdbKeyError]    = useState(false);   // TMDB_API_KEY not set in Worker
+      const [dataError,       setDataError]       = useState(null);
+
+      const T           = useMemo(() => makeTheme(theme), [theme]);
+      const dateOptions = useMemo(() => getDateOptions(), [todayStr]); // re-computes when date rolls over midnight
+      const isToday     = dateOptions[dateIdx].isToday;
+      const nowMinutes  = getNowMinutes();
+      const offset      = CHAIN_DATA[chain]?.offset ?? 20; // fallback 20 min for unknown chains
+      const isMobile    = windowWidth <= 768;
+
+      // ── Time core ────────────────────────────────────────────────────────
+      const realStart       = (p)              => p + offset;
+      const effectiveEndWith = (id, p, skip)   => realStart(p) + (movies.find(m => m.id === id)?.runtime ?? 120) - (skip ? CREDITS_ESTIMATE : 0);
+      const effectiveEnd    = (id, p)          => effectiveEndWith(id, p, skipCredits);
+      const isJoinable      = (p)              => !isToday || realStart(p) > nowMinutes;
+      const isSelected      = (id, p)          => plan.some(s => s.movieId === id && s.posted === p);
+
+      const isAvailable = (id, p) => {
+        if (!isJoinable(p)) return false;
+        if (plan.some(s => s.movieId === id)) return false; // no duplicate movies in plan
+        if (plan.length === 0) return true;
+        const last = plan[plan.length - 1];
+        return realStart(p) - effectiveEnd(last.movieId, last.posted) >= buffer;
+      };
+
+      const gapFromLast = (id, p) => {
+        if (plan.length === 0 || !isAvailable(id, p)) return null;
+        return realStart(p) - effectiveEnd(plan[plan.length - 1].movieId, plan[plan.length - 1].posted);
+      };
+
+      // ── Buffer: trim plan instead of clear ───────────────────────────────
+      const handleBufferChange = (v) => {
+        setBuffer(v);
+        for (let i = 1; i < plan.length; i++) {
+          if (realStart(plan[i].posted) - effectiveEnd(plan[i-1].movieId, plan[i-1].posted) < v) {
+            setPlan(plan.slice(0, i)); return;
+          }
+        }
+      };
+
+      // ── Skip credits: re-validate on turn-off ────────────────────────────
+      const handleSkipCredits = (v) => {
+        setSkipCredits(v);
+        if (!v) {
+          for (let i = 1; i < plan.length; i++) {
+            if (realStart(plan[i].posted) - effectiveEndWith(plan[i-1].movieId, plan[i-1].posted, false) < buffer) {
+              setPlan(plan.slice(0, i)); return;
+            }
+          }
+        }
+      };
+
+      // ── Manual click ─────────────────────────────────────────────────────
+      const handleClick = (id, p) => {
+        if (isSelected(id, p)) { setPlan(plan.slice(0, plan.findIndex(s => s.movieId === id && s.posted === p))); return; }
+        if (isAvailable(id, p)) setPlan([...plan, { movieId: id, posted: p }]);
+      };
+
+      // ── Lock In entry management ─────────────────────────────────────────
+      const clearLockResults = () => { setLockJustPicks([]); setLockFillGaps([]); setNoComboMsg(""); };
+      const updateLockEntry  = (idx, field, val) => {
+        const next = lockEntries.map((e, i) => i === idx ? { ...e, [field]: val, ...(field === "movieId" ? { showtime: "" } : {}) } : e);
+        setLockEntries(next); clearLockResults();
+        // Locking in a movie implicitly un-excludes it — you can't want it as a must-see while also skipping it
+        if (field === "movieId" && val) {
+          setExcludedIds(prev => prev.filter(id => id !== Number(val)));
+        }
+      };
+      const addLockEntry    = () => { if (lockEntries.length < MAX_LOCK_ENTRIES) setLockEntries([...lockEntries, { movieId: "", showtime: "" }]); };
+      const removeLockEntry = (idx) => { setLockEntries(lockEntries.filter((_, i) => i !== idx)); clearLockResults(); };
+      const toggleExclude = (id) => {
+        const willExclude = !excludedIds.includes(id);
+        setExcludedIds(prev => willExclude ? [...prev, id] : prev.filter(x => x !== id));
+        if (willExclude) {
+          // Auto-remove from Lock In — avoids confusing "no combos" dead-end when a locked movie is excluded
+          setLockEntries(prev => {
+            const next = prev.filter(e => String(e.movieId) !== String(id));
+            return next.length > 0 ? next : [{ movieId: "", showtime: "" }];
+          });
+          clearLockResults();
+        }
+      };
+
+      // ── Combo generation ─────────────────────────────────────────────────
+      // generateAllCombos and generateJustPicksCombos run in a Web Worker (see COMBO_WORKER_CODE above).
+      // A synchronous main-thread fallback kicks in automatically if Worker creation fails.
+      // See sendComboRequest / buildWorkerData below.
+
+      const scoreCombo = (combo) => {
+        const first = realStart(combo[0].posted);
+        const last  = effectiveEnd(combo[combo.length-1].movieId, combo[combo.length-1].posted);
+        let totalGap = 0;
+        for (let i = 1; i < combo.length; i++)
+          totalGap += realStart(combo[i].posted) - effectiveEnd(combo[i-1].movieId, combo[i-1].posted);
+        return { movieCount: combo.length, totalGap, totalTime: last - first };
+      };
+
+      const dedupeSlice = (scored, n = 3) => {
+        const seen = new Set(), out = [];
+        for (const item of scored) {
+          const key = item.combo.map(s => `${s.movieId}:${s.posted}`).join(",");
+          if (!seen.has(key)) { seen.add(key); out.push(item); }
+          if (out.length === n) break;
+        }
+        return out;
+      };
+
+      const handleQuickPlan = (preset) => {
+        setQuickPreset(preset); setNoComboMsg(""); setIsPlanning(true);
+        setQuickSuggestions([]); setLockJustPicks([]); setLockFillGaps([]);
+        sendComboRequest(buildWorkerData(), ({ allCombos }) => {
+          setIsPlanning(false);
+          if (!allCombos.length) { setQuickSuggestions([]); setNoComboMsg("no_general"); return; }
+          const scored = allCombos.map(c => ({ combo: c, ...scoreCombo(c) }));
+          const sorted =
+            preset === "most" ? [...scored].sort((a,b) => b.movieCount-a.movieCount || a.totalGap-b.totalGap) :
+            preset === "gaps" ? [...scored].sort((a,b) => a.totalGap-b.totalGap     || b.movieCount-a.movieCount) :
+                                [...scored].sort((a,b) => a.totalTime-b.totalTime   || b.movieCount-a.movieCount);
+          setQuickSuggestions(dedupeSlice(sorted));
+        });
+      };
+
+      const handleLockIn = () => {
+        const valid = lockEntries.filter(e => e.movieId);
+        if (!valid.length) return;
+        setNoComboMsg(""); setLockJustPicks([]); setLockFillGaps([]); setIsPlanning(true);
+
+        const names = valid.map(e => movies.find(m => m.id === Number(e.movieId))?.title).filter(Boolean);
+
+        // Build lock-specific data for the worker's justPicksCombos path
+        const lockMovieIds = valid.length >= 2
+          ? valid.map(e => movies.find(m => String(m.id) === String(e.movieId))?.id ?? Number(e.movieId))
+          : null;
+        const lockScreenings = {};
+        if (lockMovieIds) {
+          lockMovieIds.forEach(mid => {
+            lockScreenings[mid] = (showtimes[mid] || []).filter(p => isJoinable(p));
+          });
+        }
+
+        const workerData = { ...buildWorkerData(), lockMovieIds, lockEntries: valid, lockScreenings };
+
+        sendComboRequest(workerData, ({ allCombos, justPicksCombos }) => {
+          setIsPlanning(false);
+
+          // ── Section 1: Just your picks ───────────────────────────────────
+          if (justPicksCombos?.length) {
+            const scored = justPicksCombos.map(c => ({ combo: c, ...scoreCombo(c) }));
+            const sorted = [...scored].sort((a,b) => a.totalGap - b.totalGap || a.totalTime - b.totalTime);
+            setLockJustPicks(dedupeSlice(sorted));
+          }
+
+          // ── Section 2: Fill the gaps ─────────────────────────────────────
+          const filtered = allCombos.filter(combo =>
+            valid.every(entry =>
+              combo.some(s => s.movieId === Number(entry.movieId) && (!entry.showtime || s.posted === Number(entry.showtime)))
+            )
+          );
+          if (filtered.length) {
+            const scored = filtered.map(c => ({ combo: c, ...scoreCombo(c) }));
+            const sorted = [...scored].sort((a,b) => b.movieCount-a.movieCount || a.totalGap-b.totalGap);
+            setLockFillGaps(dedupeSlice(sorted));
+          }
+
+          // ── No results at all ────────────────────────────────────────────
+          if (!filtered.length && !(justPicksCombos?.length)) {
+            setNoComboMsg(names.length > 1
+              ? `No valid schedule found for ${names.join(" + ")}. Try different showtimes, reduce your buffer, or enable Skip Credits.`
+              : `No valid combinations found around "${names[0]}". Try a different showtime or reduce your buffer.`
+            );
+          }
+        });
+      };
+
+      // Keep handler refs current on every render so debounced timers never capture stale closures
+      handleQuickPlanRef.current = handleQuickPlan;
+      handleLockInRef.current    = handleLockIn;
+
+      const loadPlan = (combo) => {
+        offerUndo(plan);
+        setPlan(combo); setPlanOpen(false);
+        setExpandedId(null);
+        setQuickSuggestions([]); setLockJustPicks([]); setLockFillGaps([]); setNoComboMsg("");
+        showToast("✅ Plan loaded!");
+      };
+
+      // ── Plan stats ───────────────────────────────────────────────────────
+      const planFirst = plan.length > 0 ? realStart(plan[0].posted) : null;
+      const planLast  = plan.length > 0 ? effectiveEnd(plan[plan.length-1].movieId, plan[plan.length-1].posted) : null;
+      const planGaps       = plan.slice(1).map((s, i) => realStart(s.posted) - effectiveEnd(plan[i].movieId, plan[i].posted));
+      const totalGapMins   = planGaps.reduce((sum, g) => sum + g, 0);
+      const longestGapMins = planGaps.length > 0 ? Math.max(...planGaps) : 0;
+      // Only warn about post-credits when there's another movie after it — last movie has no time pressure
+      const postCreditsConflict = skipCredits && plan.some((s, i) =>
+        i < plan.length - 1 && movies.find(m => m.id === s.movieId)?.postCredits
+      );
+
+      // ── Share helpers ────────────────────────────────────────────────────
+      const generatePlanText = () => {
+        const theaterName = selectedTheater ? selectedTheater.name : chain;
+        const gaps = plan.slice(1).map((s, i) => realStart(s.posted) - effectiveEnd(plan[i].movieId, plan[i].posted));
+        const totalGap = gaps.reduce((sum, g) => sum + g, 0);
+        const hasPostCredits = plan.some(s => movies.find(m => m.id === s.movieId)?.postCredits);
+
+        const lines = [
+          `🎬 Theater Hopper — ${theaterName} · ${dateOptions[dateIdx].label}`,
+          `Arrive: ${toTime(planFirst)}  |  Leave: ${toTime(planLast)}  |  ${toDuration(planLast - planFirst)} total`,
+          ``,
+        ];
+
+        plan.forEach((s, i) => {
+          const movie = movies.find(m => m.id === s.movieId);
+          const rs = realStart(s.posted);
+          const re = effectiveEnd(s.movieId, s.posted);
+          if (i > 0) {
+            const gap = rs - effectiveEnd(plan[i-1].movieId, plan[i-1].posted);
+            const gapLabel = gap < 5 ? "⚠️ very tight" : gap < 15 ? "🟡 tight" : "✅ comfortable";
+            lines.push(`   ↕ ${toDuration(gap)} gap (${gapLabel})`);
+          }
+          lines.push(`${i+1}. ${movie.emoji} ${movie.title} · ${toTime(rs)} – ${toTime(re)}${movie.postCredits ? "  ⚡ post-credits scene!" : ""}`);
+        });
+
+        lines.push(``);
+        if (gaps.length > 0) {
+          const longestGap = Math.max(...gaps);
+          lines.push(`📊 ${plan.length} movies · ${toDuration(totalGap)} total gap · ${toDuration(longestGap)} longest gap`);
+        } else {
+          lines.push(`📊 ${plan.length} movie`);
+        }
+        lines.push(`⚙️  ${skipCredits ? "Leaving before end credits (saves ~8 min per movie)" : "Staying for full credits"}`);
+        lines.push(`⚙️  ${buffer} min personal buffer between movies`);
+        if (hasPostCredits) {
+          lines.push(`⚡ = Post or mid-credits scene — factor your gap time before leaving early!`);
+        }
+        return lines.join("\n");
+      };
+      const showToast = (msg) => {
+        setToast(msg);
+        setTimeout(() => setToast(""), 2500);
+      };
+      // Save current plan for undo (used when theater change or reset clears it)
+      const offerUndo = (savedPlan) => {
+        if (!savedPlan.length) return;
+        setUndoPlan(savedPlan);
+        if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+        undoTimerRef.current = setTimeout(() => setUndoPlan(null), 5000);
+      };
+      const handleUndo = () => {
+        if (undoPlan) {
+          setPlan(undoPlan);
+          setUndoPlan(null);
+          if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+          showToast("↩️ Plan restored!");
+        }
+      };
+      const copyPlan = () => {
+        copyToClipboard(generatePlanText(), () => {
+          setCopied(true);
+          showToast("📋 Plan copied to clipboard!");
+          setTimeout(() => setCopied(false), 2000);
+        });
+      };
+      const sharePlan = async () => {
+        const text = generatePlanText();
+        if (navigator.share) {
+          try {
+            await navigator.share({ title: `🎬 Theater Hopper — ${selectedTheater ? selectedTheater.name : chain} · ${dateOptions[dateIdx].label}`, text });
+          } catch (e) {
+            // user cancelled — do nothing
+          }
+        } else {
+          // Fallback for browsers without Share API
+          copyToClipboard(text, () => {
+            setCopied(true);
+            showToast("📋 Copied! (Share not available on this browser)");
+            setTimeout(() => setCopied(false), 2000);
+          });
+        }
+      };
+
+      // ── Save to Calendar (.ics) ──────────────────────────────────────────
+      const saveToCalendar = () => {
+        const selectedDate = new Date(dateOptions[dateIdx].dateStr);
+        const ymd = selectedDate.toISOString().slice(0, 10).replace(/-/g, ''); // YYYYMMDD
+        const theaterName = selectedTheater ? selectedTheater.name : chain;
+        const theaterAddr = selectedTheater ? selectedTheater.address : '';
+        const pad = (n) => String(n).padStart(2, '0');
+        const toIcsTime = (mins) => `${ymd}T${pad(Math.floor(mins/60))}${pad(mins%60)}00`;
+        const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2)}@theaterhop`;
+
+        const lines = [
+          'BEGIN:VCALENDAR',
+          'VERSION:2.0',
+          'PRODID:-//Theater Hopper//EN',
+          'CALSCALE:GREGORIAN',
+          'METHOD:PUBLISH',
+        ];
+
+        plan.forEach((s, i) => {
+          const movie  = movies.find(m => m.id === s.movieId);
+          const rs     = realStart(s.posted);
+          const re     = effectiveEnd(s.movieId, s.posted);
+          const nextGap = i < plan.length - 1
+            ? realStart(plan[i+1].posted) - re : null;
+          const desc = [
+            `Movie ${i+1} of ${plan.length} — Theater Hopper plan`,
+            `${movie.rating} · ${toDuration(movie.runtime)}`,
+            movie.postCredits ? '⚡ Stay for post-credits scene!' : '',
+            nextGap !== null ? `Gap to next movie: ${toDuration(nextGap)}` : '',
+            skipCredits ? 'Leaving before end credits (saves ~8 min)' : 'Staying for full credits',
+          ].filter(Boolean).join('\\n');
+
+          lines.push(
+            'BEGIN:VEVENT',
+            `UID:${uid()}`,
+            `DTSTART:${toIcsTime(rs)}`,
+            `DTEND:${toIcsTime(re)}`,
+            `SUMMARY:${movie.emoji} ${movie.title} @ ${theaterName}`,
+            `DESCRIPTION:${desc}`,
+            theaterAddr ? `LOCATION:${theaterAddr}` : '',
+            'END:VEVENT',
+          );
+        });
+
+        lines.push('END:VCALENDAR');
+
+        const blob = new Blob([lines.filter(Boolean).join('\r\n')], { type: 'text/calendar;charset=utf-8' });
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        a.href = url; a.download = 'theater-hopper-plan.ics';
+        document.body.appendChild(a); a.click();
+        document.body.removeChild(a); URL.revokeObjectURL(url);
+        showToast("📅 Calendar file downloaded!");
+      };
+
+      // ── Shareable URL ────────────────────────────────────────────────────
+      const copyLink = () => {
+        const hash = plan.map(s => `${s.movieId}:${s.posted}`).join(',');
+        const url  = `${window.location.origin}${window.location.pathname}#plan=${hash}`;
+        copyToClipboard(url, () => showToast("🔗 Link copied!"));
+      };
+
+      // ── Theater finder helpers ───────────────────────────────────────────
+      const filteredTheaters = theaters.filter(t => t.dist <= theaterRadius);
+
+      // ── Shared movie-loading logic (used by selectTheater + date-change refresh) ──
+      // Each call bumps movieGenRef so any in-flight TMDB enrichment from a previous
+      // theater / date selection is silently discarded — no stale overwrites.
+      const loadMoviesForTheater = (t) => {
+        if (!t._movies?.length) return;
+        const gen = ++movieGenRef.current;
+        const basicMovies = t._movies.map(fm => {
+          const mystery = detectMysteryEvent(fm.title);
+          return {
+            id: fm.id,
+            title: mystery ? mystery.title : fm.title,
+            genre: mystery ? mystery.genre : (fm.genres || []).join(", "),
+            rating: (mystery && (!fm.rating || fm.rating === "NR")) ? mystery.rating : (fm.rating || "NR"),
+            runtime: fm.runtime ? parseInt(fm.runtime, 10) : (mystery ? mystery.runtime : 120),
+            emoji: mystery ? mystery.emoji : emojiFromFandangoGenres(fm.genres),
+            postCredits: POST_CREDITS_IDS.has(fm.id),
+            isMystery: !!mystery,
+            director: "", cast: [], tmdbScore: "?",
+            posterPath: null,
+            // Fandango may return poster as an object — only keep it if it's a URL string
+            fandangoPoster: typeof fm.poster === "string" && fm.poster.startsWith("http") ? fm.poster : null,
+            synopsis: mystery ? mystery.synopsis : "",
+            trailerUrl: mystery
+              ? (mystery.trailerUrl || null)
+              : `https://www.youtube.com/results?search_query=${encodeURIComponent(fm.title + " official trailer")}`,
+          };
+        });
+        setMovies(basicMovies);
+        setShowtimes(buildShowtimesMap(t._movies));
+        setFormats(buildFormatsMap(t._movies));
+        if (PROXY_URL) {
+          setIsLoadingMeta(true); setTmdbKeyError(false);
+          enrichWithTmdb(basicMovies, PROXY_URL)
+            .then(({ movies: enriched, keyMissing }) => {
+              if (movieGenRef.current === gen) {
+                setMovies(enriched);
+                setIsLoadingMeta(false);
+                if (keyMissing) setTmdbKeyError(true);
+              }
+            })
+            .catch(() => { if (movieGenRef.current === gen) setIsLoadingMeta(false); });
+        }
+      };
+
+      const selectTheater = (t) => {
+        offerUndo(plan); // save plan before clearing — user can undo for 5s
+        setSelectedTheater(t);
+        // Only set chain to a known CHAIN_DATA key so the dropdown + offset lookup don't break
+        setChain(CHAIN_DATA[t.chain] ? t.chain : "AMC");
+        setTheaterOpen(false);
+        showToast(plan.length > 0 ? "📍 Theater updated — plan cleared" : "📍 Theater settings loaded");
+        setPlan([]); setExpandedId(null); setExcludedIds([]); setQuickSuggestions([]); setLockJustPicks([]); setLockFillGaps([]); setNoComboMsg(""); setQuickPreset(null);
+
+        if (t._movies?.length && PROXY_URL) {
+          loadMoviesForTheater(t);
+        } else if (!PROXY_URL) {
+          setMovies(DEMO_MOVIES);
+          setShowtimes(DEMO_SHOWTIMES);
+        }
+        // else: theater has no movie data from live API — leave movies as-is
+      };
+
+      // ── Fetch theater list from Fandango NAPI via proxy ─────────────────────
+      const fetchTheaters = React.useCallback(async (zip, dateStr, radius) => {
+        if (!PROXY_URL) return;
+        setIsLoadingData(true); setDataError(null);
+        try {
+          const res = await fetch(`${PROXY_URL}/theaters?zip=${encodeURIComponent(zip)}&date=${dateStr}&radius=${radius || 10}`);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const raw = await res.json();
+          const parsed = parseFandangoResponse(raw);
+          if (parsed.length > 0) {
+            setTheaters(parsed);
+            setUsingLiveData(true);
+            showToast(`📍 Found ${parsed.length} theater${parsed.length !== 1 ? "s" : ""} near ${zip}`);
+            return parsed; // caller can use this to refresh selected theater
+          } else {
+            setTheaters(DEMO_THEATERS); setUsingLiveData(false);
+            showToast("⚠️ No theaters found — showing demo theaters");
+          }
+        } catch(e) {
+          console.warn("[TH] fetchTheaters failed:", e.message);
+          setDataError(e.message);
+          setTheaters(DEMO_THEATERS); setUsingLiveData(false);
+          showToast("⚠️ Couldn't reach Fandango — showing demo theaters");
+        } finally {
+          setIsLoadingData(false);
+        }
+        return null;
+      }, []);
+
+      const handleGeolocate = () => {
+        if (!navigator.geolocation) { showToast("⚠️ Geolocation not available"); return; }
+        setGeoLoading(true);
+        navigator.geolocation.getCurrentPosition(
+          async ({ coords }) => {
+            try {
+              // Nominatim reverse-geocode: free, no API key, returns postcode
+              const res = await fetch(
+                `https://nominatim.openstreetmap.org/reverse?lat=${coords.latitude}&lon=${coords.longitude}&format=json`,
+                { headers: { "Accept-Language": "en-US,en;q=0.9" } }
+              );
+              const data = await res.json();
+              const zip = (data?.address?.postcode || "").replace(/[^0-9]/g, "").slice(0, 5);
+              if (/^\d{5}$/.test(zip)) {
+                setTheaterQuery(zip);
+                showToast("📡 Found your location");
+              } else {
+                showToast("⚠️ Couldn't find your zip — please enter it manually");
+              }
+            } catch {
+              showToast("⚠️ Location lookup failed — please enter your zip code");
+            }
+            setGeoLoading(false);
+          },
+          () => { showToast("⚠️ Location access denied"); setGeoLoading(false); }
+        );
+      };
+
+      // ── Refs so visibility handler always sees current values without re-registering ──
+      const planRef     = React.useRef(plan);     planRef.current     = plan;
+      const dateIdxRef  = React.useRef(dateIdx);  dateIdxRef.current  = dateIdx;
+      const offsetRef   = React.useRef(offset);   offsetRef.current   = offset;
+      const todayStrRef = React.useRef(todayStr); todayStrRef.current = todayStr;
+      // Keep selectedTheaterRef current without adding it to effect dep arrays
+      selectedTheaterRef.current = selectedTheater;
+
+      // ── Page Visibility: re-validate plan when tab regains focus ─────────
+      React.useEffect(() => {
+        const handleVisibility = () => {
+          if (document.visibilityState !== 'visible') return;
+          const currentToday = new Date().toDateString();
+
+          // ── Midnight rollover ─────────────────────────────────────────────
+          if (currentToday !== todayStrRef.current) {
+            setTodayStr(currentToday);
+            setDateIdx(0);
+            setPlan([]);
+            setToast("🌅 New day! Your plan has been cleared.");
+            setTimeout(() => setToast(""), 3500);
+            return;
+          }
+
+          // ── Same day: trim any showtimes that have already started ────────
+          if (dateIdxRef.current === 0 && planRef.current.length > 0) {
+            const now = getNowMinutes();
+            const staleIdx = planRef.current.findIndex(s => s.posted + offsetRef.current <= now);
+            if (staleIdx !== -1) {
+              const kept = planRef.current.slice(0, staleIdx);
+              setPlan(kept);
+              const removed = planRef.current.length - kept.length;
+              const msg = kept.length > 0
+                ? `⏰ ${removed} showtime${removed > 1 ? 's' : ''} removed — already started`
+                : "⏰ Showtimes have passed — plan cleared";
+              setToast(msg);
+              setTimeout(() => setToast(""), 3500);
+            }
+          }
+        };
+
+        document.addEventListener('visibilitychange', handleVisibility);
+        return () => document.removeEventListener('visibilitychange', handleVisibility);
+      }, []); // empty deps — refs keep values current
+
+      // ── Dynamic Plan My Day: re-run when buffer or skipCredits changes ───
+      // Debounced 250ms so dragging the buffer slider doesn't hammer generateAllCombos on every pixel.
+      // Handler refs ensure the timeout always calls the latest closure, not a stale one.
+      React.useEffect(() => {
+        const hasQuick = quickPreset !== null;
+        const hasLock  = (lockJustPicks.length > 0 || lockFillGaps.length > 0) && lockEntries.some(e => e.movieId);
+        if (!hasQuick && !hasLock) return;
+        if (planRegenTimerRef.current) clearTimeout(planRegenTimerRef.current);
+        planRegenTimerRef.current = setTimeout(() => {
+          if (hasQuick) handleQuickPlanRef.current(quickPreset);
+          else if (hasLock) handleLockInRef.current();
+        }, 250);
+        return () => clearTimeout(planRegenTimerRef.current);
+      }, [buffer, skipCredits]); // eslint-disable-line
+
+      React.useEffect(() => {
+        const onResize = () => setWindowWidth(window.innerWidth);
+        window.addEventListener('resize', onResize);
+        return () => window.removeEventListener('resize', onResize);
+      }, []);
+
+      // ── Web Worker: combo generation off the main thread ─────────────────────
+      React.useEffect(() => {
+        try {
+          const blob = new Blob([COMBO_WORKER_CODE], { type: 'application/javascript' });
+          const url  = URL.createObjectURL(blob);
+          const w    = new Worker(url);
+          URL.revokeObjectURL(url);
+          w.onmessage = ({ data }) => {
+            const pending = onComboResultRef.current;
+            if (pending && pending.id === data.id) pending.fn(data);
+          };
+          comboWorkerRef.current = w;
+          return () => w.terminate();
+        } catch (e) {
+          console.warn("[TH] Web Worker unavailable — falling back to main thread:", e.message);
+        }
+      }, []);
+
+      // Packages all the data the worker needs for combo generation.
+      const buildWorkerData = () => {
+        const screenings = movies
+          .filter(m => !excludedIds.includes(m.id))
+          .flatMap(m => (showtimes[m.id] || []).filter(p => isJoinable(p)).map(p => ({ movieId: m.id, posted: p })));
+        screenings.sort((a, b) => realStart(a.posted) - realStart(b.posted));
+        const runtimes = {};
+        movies.forEach(m => { runtimes[m.id] = m.runtime || 120; });
+        return { screenings, buffer, offset, runtimes, skipCredits, ce: CREDITS_ESTIMATE };
+      };
+
+      // Sends a combo request to the worker (or falls back to sync if worker unavailable).
+      const sendComboRequest = (workerData, onResult) => {
+        const id = ++comboReqIdRef.current;
+        onComboResultRef.current = { id, fn: onResult };
+        if (comboWorkerRef.current) {
+          comboWorkerRef.current.postMessage({ ...workerData, id });
+        } else {
+          // Synchronous fallback: run on main thread if Worker creation failed
+          setTimeout(() => {
+            const { screenings, buffer: buf, offset: off, runtimes, skipCredits: sc, ce } = workerData;
+            const CAP = 500;
+            const realStartS = p => p + off;
+            const effectiveEndS = (mid, p) => realStartS(p) + (runtimes[mid] || 120) - (sc ? ce : 0);
+            const results = [];
+            function bt(cur) {
+              if (results.length >= CAP) return;
+              if (cur.length >= 2) results.push([...cur]);
+              if (cur.length >= 4) return;
+              const last = cur[cur.length - 1], end = effectiveEndS(last.movieId, last.posted);
+              for (const s of screenings) {
+                if (results.length >= CAP) break;
+                if (cur.some(c => c.movieId === s.movieId)) continue;
+                if (realStartS(s.posted) >= end + buf) { cur.push(s); bt(cur); cur.pop(); }
+              }
+            }
+            screenings.forEach(s => { if (results.length < CAP) bt([s]); });
+            onComboResultRef.current?.id === id && onResult({ id, allCombos: results, justPicksCombos: null });
+          }, 0);
+        }
+      };
+
+      // ── Lazy trailer upgrade: fetch direct YouTube link when synopsis is opened ──
+      // trailerUrl starts as a YouTube search URL (works immediately as fallback).
+      // On first expand we hit /videos to upgrade it to the real official trailer link.
+      // Result is also written back to TMDB_CACHE so later re-expands are instant.
+      React.useEffect(() => {
+        if (!expandedId || !PROXY_URL) return;
+        const movie = movies.find(m => m.id === expandedId);
+        if (!movie?._tmdbId) return;
+        // Already upgraded to a direct watch link — skip
+        if (movie.trailerUrl && !movie.trailerUrl.includes('youtube.com/results')) return;
+        fetch(`${PROXY_URL}/tmdb/movie/${movie._tmdbId}/videos`)
+          .then(r => r.json())
+          .then(data => {
+            const vids = data.results || [];
+            const pick = vids.find(v => v.site === 'YouTube' && v.type === 'Trailer' && v.official)
+                      || vids.find(v => v.site === 'YouTube' && v.type === 'Trailer')
+                      || vids.find(v => v.site === 'YouTube');
+            if (!pick?.key) return; // no video found — keep YouTube search URL
+            const directUrl = `https://www.youtube.com/watch?v=${pick.key}`;
+            setMovies(prev => prev.map(m => m.id === expandedId ? { ...m, trailerUrl: directUrl } : m));
+            // Update cache so this movie never hits /videos again this session
+            const c = TMDB_CACHE.get(expandedId);
+            if (c) TMDB_CACHE.set(expandedId, { ...c, trailerUrl: directUrl });
+          })
+          .catch(() => {}); // silent — YouTube search URL stays as fallback
+      }, [expandedId]); // eslint-disable-line
+
+      // ── Fetch theaters when a valid zip is entered or the date changes ───────
+      // Debounced 600ms so we don't fire on every keystroke while typing.
+      // Skipped entirely when PROXY_URL is not set (demo mode).
+      React.useEffect(() => {
+        if (!PROXY_URL) return;
+        const zip = theaterQuery.trim();
+        if (!zip || !/^\d{5}$/.test(zip)) return;
+        if (fetchTimerRef.current) clearTimeout(fetchTimerRef.current);
+        fetchTimerRef.current = setTimeout(async () => {
+          // Convert stored dateStr (e.g. "Sat Apr 19 2026") → "YYYY-MM-DD" for Fandango
+          const d = new Date(dateOptions[dateIdx]?.dateStr || Date.now());
+          const dateStr = d.toISOString().slice(0, 10);
+          const parsed = await fetchTheaters(zip, dateStr, theaterRadius);
+          // If a theater was already selected, refresh its movies for the new date.
+          // selectedTheaterRef stays current without being in the dep array.
+          if (parsed && selectedTheaterRef.current?.id) {
+            const updated = parsed.find(t => t.id === selectedTheaterRef.current.id);
+            if (updated?._movies?.length) {
+              // Update selectedTheater to the fresh version and reload movies
+              setSelectedTheater(updated);
+              setPlan([]); setExpandedId(null); setQuickSuggestions([]);
+              setLockJustPicks([]); setLockFillGaps([]); setNoComboMsg(""); setQuickPreset(null);
+              loadMoviesForTheater(updated);
+              showToast("📅 Date changed — listings refreshed");
+            }
+          }
+        }, 600);
+        return () => clearTimeout(fetchTimerRef.current);
+      }, [theaterQuery, dateIdx, theaterRadius]); // eslint-disable-line
+
+
+      // ── Shareable URL: parse #plan= on mount, apply once movies are loaded ──
+      // Split into two effects so live-data movie IDs are validated against real
+      // movies (not demo movies that happen to be in state at mount time).
+      React.useEffect(() => {
+        const hash = window.location.hash;
+        if (!hash) return;
+        const match = hash.match(/^#plan=(.+)$/);
+        if (!match) return;
+        try {
+          const entries = match[1].split(',').map(p => {
+            const [mid, posted] = p.split(':').map(Number);
+            return { movieId: mid, posted };
+          });
+          if (entries.length > 0 && entries.every(e => !isNaN(e.movieId) && !isNaN(e.posted))) {
+            pendingHashPlanRef.current = entries;
+            // Clear the hash now so a page refresh doesn't re-trigger
+            history.replaceState(null, '', window.location.pathname + window.location.search);
+          }
+        } catch {}
+      }, []); // runs once on mount
+
+      // When movies + showtimes are available (could be demo or live), validate & apply
+      React.useEffect(() => {
+        if (!pendingHashPlanRef.current || movies.length === 0) return;
+        const entries = pendingHashPlanRef.current;
+        const valid = entries.every(e =>
+          movies.find(m => m.id === e.movieId) &&
+          (showtimes[e.movieId] || []).includes(e.posted)
+        );
+        if (valid) {
+          setPlan(entries);
+          showToast("🔗 Shared plan loaded!");
+          pendingHashPlanRef.current = null; // consumed — stop retrying
+        }
+        // If not valid yet (movies still loading), this effect re-fires
+        // on next movies/showtimes update (e.g., after TMDB enrichment completes)
+      }, [movies, showtimes]); // eslint-disable-line
+
+      // ── Persist settings + plan to localStorage ──────────────────────────
+      React.useEffect(() => {
+        toStorage('th_plan', plan);
+        toStorage('th_savedDate', new Date().toDateString());
+        toStorage('th_buffer', buffer);
+        toStorage('th_skipCredits', skipCredits);
+        toStorage('th_theme', theme);
+        toStorage('th_chain', chain);
+        toStorage('th_selectedTheater', selectedTheater);
+        toStorage('th_theaterQuery', theaterQuery);
+        toStorage('th_excludedIds', excludedIds);
+        toStorage('th_lockEntries', lockEntries);
+        toStorage('th_selectedDateStr', dateOptions[dateIdx]?.dateStr || new Date().toDateString());
+        toStorage('th_theaterRadius', theaterRadius);
+        toStorage('th_planMode', planMode);
+      }, [plan, buffer, skipCredits, theme, chain, selectedTheater, theaterQuery, excludedIds, lockEntries, dateIdx, theaterRadius, planMode]);
+
+      // ── Sync theme to data-theme attribute for CSS scrollbar vars ────────
+      React.useEffect(() => {
+        document.documentElement.setAttribute('data-theme', theme);
+      }, [theme]);
+
+      // ── Render ───────────────────────────────────────────────────────────
+      return (
+        <div style={{ background: T.bg, minHeight: "100vh", color: T.text, padding: isMobile ? "14px 16px" : "20px 24px", paddingBottom: isMobile && plan.length > 0 ? "90px" : undefined, transition: "background 0.25s, color 0.25s" }}>
+
+          {/* HEADER */}
+          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: "18px", gap: "12px", flexWrap: "wrap" }}>
+            <div>
+              <div style={{ fontSize: isMobile ? "1.65rem" : "2rem", fontWeight: 900, background: "linear-gradient(135deg,#f7971e,#ffd200)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", letterSpacing: "-0.5px" }}>
+                🎬 Theater Hopper
+              </div>
+              <div style={{ color: T.muted, fontSize: "0.82rem", marginTop: "3px" }}>
+                {selectedTheater
+                  ? <>{selectedTheater.name} &nbsp;·&nbsp; {selectedTheater.dist} mi</>
+                  : <>No theater selected</>
+                }
+                {!usingLiveData && <>&nbsp;·&nbsp; <span style={{ color: "#f7971e88" }}>Demo Mode</span></>}
+                {isLoadingMeta && <>&nbsp;·&nbsp; <span style={{ color: "#3498db88" }}>Loading details…</span></>}
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
+              <button onClick={() => setTheme(t => t === "dark" ? "light" : "dark")}
+                style={{ background: T.input, border: `1px solid ${T.inputBorder}`, borderRadius: "20px", padding: "7px 14px", cursor: "pointer", fontSize: "0.85rem", color: T.text, fontWeight: 600 }}>
+                {theme === "dark" ? "☀️ Light" : "🌙 Dark"}
+              </button>
+            </div>
+          </div>
+
+          {/* DATE PICKER */}
+          <div style={{ display: "flex", gap: "8px", marginBottom: "16px", flexWrap: "wrap" }}>
+            {dateOptions.map((d, i) => (
+              <button key={i} onClick={() => { if (i !== dateIdx) offerUndo(plan); setDateIdx(i); setPlan([]); setExpandedId(null); setQuickSuggestions([]); setLockJustPicks([]); setLockFillGaps([]); setQuickPreset(null); setNoComboMsg(""); }}
+                style={{ padding: "7px 16px", borderRadius: "20px", border: `1px solid ${dateIdx === i ? "#f7971e" : T.inputBorder}`, background: dateIdx === i ? "#f7971e22" : T.input, color: dateIdx === i ? "#f7971e" : T.sub, cursor: "pointer", fontSize: "0.82rem", fontWeight: dateIdx === i ? 700 : 400, transition: "all 0.15s" }}>
+                {d.label}
+              </button>
+            ))}
+          </div>
+
+          {/* THEATER FINDER */}
+          <div style={{ background: T.card, border: `1px solid ${theaterOpen ? "#f7971e44" : T.cardBorder}`, borderRadius: "14px", marginBottom: "14px", overflow: "hidden", transition: "border-color 0.2s" }}>
+            {selectedTheater && !theaterOpen ? (
+              /* Collapsed: selected theater summary */
+              <div style={{ display: "flex", alignItems: "center", gap: "12px", padding: "13px 18px" }}>
+                <span style={{ fontSize: "1.1rem" }}>📍</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <span
+                    onClick={() => setTheaterOpen(true)}
+                    onMouseEnter={e => { e.currentTarget.style.textDecoration = "underline"; e.currentTarget.style.color = "#f7971e"; }}
+                    onMouseLeave={e => { e.currentTarget.style.textDecoration = "none"; e.currentTarget.style.color = T.text; }}
+                    style={{ fontWeight: 700, fontSize: "0.92rem", cursor: "pointer", transition: "color 0.15s" }}>
+                    {selectedTheater.name}
+                  </span>
+                  <span style={{ color: T.muted, fontSize: "0.76rem", marginLeft: "10px" }}>{selectedTheater.dist} mi · {selectedTheater.chain} · +{CHAIN_DATA[selectedTheater.chain]?.offset ?? "?"}min preshow</span>
+                </div>
+              </div>
+            ) : (
+              /* Open: search UI */
+              <div style={{ padding: "18px 20px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "14px" }}>
+                  <span style={{ fontWeight: 700, fontSize: "0.9rem", color: T.text }}>📍 Find Your Theater</span>
+                  {selectedTheater && (
+                    <button onClick={() => setTheaterOpen(false)}
+                      style={{ marginLeft: "auto", background: "none", border: "none", color: T.muted, cursor: "pointer", fontSize: "1rem", lineHeight: 1 }}>✕</button>
+                  )}
+                </div>
+
+                {/* Zip input + geolocation */}
+                <div style={{ display: "flex", gap: "8px", marginBottom: "12px", flexWrap: "wrap" }}>
+                  <input type="text" inputMode="numeric" pattern="[0-9]*" placeholder="Enter zip code..." value={theaterQuery}
+                    onChange={e => setTheaterQuery(e.target.value)}
+                    style={{ flex: 1, minWidth: "140px", background: T.input, color: T.text, border: `1px solid ${T.inputBorder}`, borderRadius: "8px", padding: "8px 12px", fontSize: "0.88rem", outline: "none" }} />
+                  <button onClick={handleGeolocate} disabled={geoLoading}
+                    style={{ padding: "8px 14px", borderRadius: "8px", border: `1px solid ${T.inputBorder}`, background: T.input, color: T.sub, cursor: "pointer", fontSize: "0.82rem", whiteSpace: "nowrap" }}>
+                    {geoLoading ? "Locating…" : "📡 Use My Location"}
+                  </button>
+                </div>
+
+                {/* Radius filter */}
+                <div style={{ display: "flex", gap: "6px", alignItems: "center", marginBottom: "14px", flexWrap: "wrap" }}>
+                  <span style={{ fontSize: "0.7rem", color: T.muted, marginRight: "2px" }}>Radius:</span>
+                  {[5, 10, 15, 25].map(r => (
+                    <button key={r} onClick={() => setTheaterRadius(r)}
+                      style={{ padding: "5px 12px", borderRadius: "20px", border: `1px solid ${theaterRadius === r ? "#f7971e" : T.inputBorder}`, background: theaterRadius === r ? "#f7971e22" : "transparent", color: theaterRadius === r ? "#f7971e" : T.sub, cursor: "pointer", fontSize: "0.78rem", fontWeight: theaterRadius === r ? 700 : 400, transition: "all 0.15s" }}>
+                      {r} mi
+                    </button>
+                  ))}
+                </div>
+
+                {/* Theater list */}
+                {isLoadingData ? (
+                  <div style={{ textAlign: "center", padding: "20px", color: T.muted, fontSize: "0.82rem" }}>
+                    ⏳ Searching Fandango…
+                  </div>
+                ) : dataError ? (
+                  <div style={{ fontSize: "0.78rem", color: "#e74c3c", background: "#e74c3c11", border: "1px solid #e74c3c33", borderRadius: "8px", padding: "10px 14px" }}>
+                    ⚠️ {dataError} — showing demo theaters
+                  </div>
+                ) : filteredTheaters.length > 0 ? (
+                  <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                    <div style={{ fontSize: "0.68rem", color: T.faint, marginBottom: "2px" }}>
+                      {usingLiveData
+                        ? `Live Fandango data · ${filteredTheaters.length} theater${filteredTheaters.length !== 1 ? "s" : ""} within ${theaterRadius} mi`
+                        : "Demo — enter a zip code above to search real theaters"}
+                    </div>
+                    {filteredTheaters.map(t => (
+                      <button key={t.id} onClick={() => selectTheater(t)}
+                        onMouseEnter={e => e.currentTarget.style.borderColor = "#f7971e"}
+                        onMouseLeave={e => e.currentTarget.style.borderColor = T.cardBorder}
+                        style={{ display: "flex", alignItems: "center", gap: "12px", padding: "10px 14px", background: selectedTheater?.id === t.id ? "#f7971e12" : T.tagBg, border: `1px solid ${selectedTheater?.id === t.id ? "#f7971e55" : T.cardBorder}`, borderRadius: "10px", cursor: "pointer", textAlign: "left", transition: "all 0.15s" }}>
+                        <div style={{ width: "8px", height: "8px", borderRadius: "50%", background: t.dist <= 3 ? "#2ecc71" : t.dist <= 8 ? "#f39c12" : "#e74c3c", flexShrink: 0 }} />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontWeight: 700, fontSize: "0.88rem", color: T.text }}>{t.name}</div>
+                          <div style={{ fontSize: "0.72rem", color: T.muted, marginTop: "1px" }}>{t.address}</div>
+                        </div>
+                        <div style={{ textAlign: "right", flexShrink: 0 }}>
+                          <div style={{ fontSize: "0.78rem", color: "#f7971e", fontWeight: 700 }}>{t.dist} mi</div>
+                          <div style={{ fontSize: "0.68rem", color: T.muted }}>+{CHAIN_DATA[t.chain]?.offset ?? "?"}min ads</div>
+                        </div>
+                        {selectedTheater?.id === t.id && <span style={{ fontSize: "0.8rem", color: "#f7971e" }}>✓</span>}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{ fontSize: "0.82rem", color: T.muted, textAlign: "center", padding: "16px" }}>
+                    No theaters within {theaterRadius} miles — try a wider radius
+                  </div>
+                )}
+
+              </div>
+            )}
+          </div>
+
+          {/* SETTINGS */}
+          <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: "14px", padding: "18px 20px", marginBottom: "14px", display: "flex", flexDirection: isMobile ? "column" : "row", gap: isMobile ? "18px" : "28px", flexWrap: "wrap", alignItems: "flex-start" }}>
+            {/* Chain */}
+            <div>
+              <div style={{ fontSize: "0.68rem", color: T.muted, letterSpacing: "0.08em", marginBottom: "8px" }}>THEATER CHAIN</div>
+              <select value={chain} onChange={e => { offerUndo(plan); setChain(e.target.value); setPlan([]); setExpandedId(null); setQuickSuggestions([]); setLockJustPicks([]); setLockFillGaps([]); showToast(plan.length > 0 ? "⛓️ Chain updated — plan cleared" : "⛓️ Chain updated"); }}
+                style={{ background: T.input, color: T.text, border: `1px solid ${T.inputBorder}`, borderRadius: "8px", padding: "8px 12px", fontSize: "0.9rem", cursor: "pointer", width: isMobile ? "100%" : "auto" }}>
+                {Object.keys(CHAIN_DATA).map(c => <option key={c}>{c}</option>)}
+              </select>
+              <div style={{ marginTop: "6px" }}>
+                <span style={{ fontSize: "0.78rem", color: "#f7971e", fontWeight: 700 }}>+{offset} min preshow</span>
+                {selectedTheater && (
+                  <div style={{ fontSize: "0.7rem", color: T.faint, marginTop: "2px" }}>auto-set from your theater</div>
+                )}
+                <div style={{ fontSize: "0.72rem", color: T.sub, marginTop: "3px", maxWidth: isMobile ? "100%" : "300px", lineHeight: "1.45" }}>📌 {CHAIN_DATA[chain]?.note ?? "Preshow estimate may vary — build in extra buffer if cutting it close"}</div>
+              </div>
+            </div>
+            {/* Buffer */}
+            <div>
+              <div style={{ fontSize: "0.68rem", color: T.muted, letterSpacing: "0.08em", marginBottom: "8px" }}>
+                PERSONAL BUFFER: <span style={{ color: "#ffd200" }}>{buffer === 0 ? "none" : `${buffer} min`}</span>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <span style={{ fontSize: "0.72rem", color: T.faint }}>0</span>
+                <input type="range" min={0} max={30} step={5} value={buffer} onChange={e => handleBufferChange(Number(e.target.value))}
+                  style={{ width: isMobile ? "100%" : "130px", flex: isMobile ? 1 : "none", accentColor: "#f7971e", cursor: "pointer" }} />
+                <span style={{ fontSize: "0.72rem", color: T.faint }}>30m</span>
+              </div>
+              <div style={{ fontSize: "0.7rem", color: T.muted, marginTop: "5px" }}>bathroom · snacks · walking</div>
+            </div>
+            {/* Skip Credits */}
+            <div>
+              <div style={{ fontSize: "0.68rem", color: T.muted, letterSpacing: "0.08em", marginBottom: "8px" }}>CREDITS</div>
+              <button onClick={() => handleSkipCredits(!skipCredits)}
+                style={{ padding: "7px 16px", borderRadius: "20px", border: `1px solid ${skipCredits ? "#2ecc7177" : "#e67e2277"}`, background: skipCredits ? "#2ecc7118" : "#e67e2218", color: skipCredits ? "#2ecc71" : "#e67e22", cursor: "pointer", fontSize: "0.82rem", fontWeight: 700, transition: "all 0.2s" }}>
+                {skipCredits ? "✓ Skip Credits (−8 min)" : "⏳ Watch Full Credits"}
+              </button>
+              <div style={{ fontSize: "0.7rem", color: T.muted, marginTop: "5px" }}>
+                {skipCredits ? "More hopping options — leave before end" : "Fewer options but catch post-credits scenes"}
+              </div>
+            </div>
+          </div>
+
+          {/* Estimates disclaimer */}
+          <div style={{ fontSize: "0.7rem", color: T.faint, marginBottom: "12px", lineHeight: "1.55", paddingLeft: "2px" }}>
+            ⚠️ Pre-show, trailer, and end-credit lengths are estimates and can vary by theater, date, and film. Build in extra buffer if you're cutting it close.
+          </div>
+
+          {/* Post-credits warning */}
+          {postCreditsConflict && (
+            <div style={{ background: T.warnBg, border: `1px solid ${T.warnBorder}`, borderRadius: "10px", padding: "10px 16px", marginBottom: "12px", fontSize: "0.82rem", color: "#e74c3c", lineHeight: "1.5" }}>
+              ⚡ One or more movies in your plan have a mid or post-credits scene. Leaving during credits means you'd miss it.
+            </div>
+          )}
+
+          {/* PLAN MY DAY */}
+          <div style={{ marginBottom: "16px" }}>
+            <button onClick={() => { setPlanOpen(o => !o); if (planOpen) { setQuickSuggestions([]); setLockJustPicks([]); setLockFillGaps([]); setQuickPreset(null); setNoComboMsg(""); } }}
+              style={{ width: "100%", textAlign: "left", background: "linear-gradient(135deg,#f7971e,#ffd200)", border: "none", borderRadius: planOpen ? "12px 12px 0 0" : "12px", padding: "12px 20px", cursor: "pointer", color: "#000", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div>
+                <div style={{ fontSize: "0.95rem", fontWeight: 800 }}>🎯 Plan My Day</div>
+                {!planOpen && <div style={{ fontSize: "0.75rem", fontWeight: 500, opacity: 0.65, marginTop: "2px" }}>Auto-build a schedule, or lock in your must-sees and we'll fill the rest</div>}
+              </div>
+              <span style={{ fontSize: "0.8rem", opacity: 0.7, flexShrink: 0, marginLeft: "12px" }}>{planOpen ? "▲ close" : "▼ open"}</span>
+            </button>
+
+            {planOpen && (
+              <div style={{ background: T.planBg, border: `1px solid ${T.cardBorder}`, borderTop: "none", borderRadius: "0 0 12px 12px", padding: "20px" }}>
+
+                {/* Tabs */}
+                <div style={{ display: "flex", gap: "8px", marginBottom: "18px" }}>
+                  {[["quick","⚡ Quick Plans"],["lockin","🔒 Lock In Movies"]].map(([mode,label]) => (
+                    <button key={mode} onClick={() => { setPlanMode(mode); setQuickSuggestions([]); setLockJustPicks([]); setLockFillGaps([]); setQuickPreset(null); setNoComboMsg(""); }}
+                      style={{ padding: "8px 18px", borderRadius: "20px", border: `1px solid ${planMode === mode ? "#f7971e" : T.inputBorder}`, background: planMode === mode ? "#f7971e22" : "transparent", color: planMode === mode ? "#f7971e" : T.sub, cursor: "pointer", fontSize: "0.85rem", fontWeight: planMode === mode ? 700 : 400, transition: "all 0.15s" }}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Quick Plans */}
+                {planMode === "quick" && (
+                  <div>
+                    <p style={{ fontSize: "0.82rem", color: T.sub, marginBottom: "14px" }}>Choose a style — we'll find the best combinations available today.</p>
+                    <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                      {[
+                        ["most",     "🎬 Most Movies",   "Pack in as many films as possible"],
+                        ["gaps",     "🧘 Fewest Gaps",   "Minimize dead time between movies"],
+                        ["shortest", "⏱️ Shortest Day", "Done earliest, most compact schedule"],
+                      ].map(([preset, label, desc]) => (
+                        <button key={preset} onClick={() => handleQuickPlan(preset)}
+                          style={{ padding: "12px 16px", borderRadius: "10px", border: `2px solid ${quickPreset === preset ? "#f7971e" : T.inputBorder}`, background: quickPreset === preset ? "#f7971e18" : T.input, color: quickPreset === preset ? "#f7971e" : T.text, cursor: "pointer", textAlign: "left", minWidth: isMobile ? "100%" : "155px", transition: "all 0.15s" }}>
+                          <div style={{ fontWeight: 700, fontSize: "0.88rem", marginBottom: "3px" }}>{label}</div>
+                          <div style={{ fontSize: "0.7rem", color: quickPreset === preset ? "#f7971eaa" : T.muted }}>{desc}</div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Lock In */}
+                {planMode === "lockin" && (
+                  <div>
+                    <p style={{ fontSize: "0.82rem", color: T.sub, marginBottom: "14px" }}>
+                      Lock in your must-see movies and we'll build the best day around them.
+                      <span style={{ color: T.muted }}> (Up to {MAX_LOCK_ENTRIES})</span>
+                    </p>
+
+                    <div style={{ display: "flex", flexDirection: "column", gap: "10px", marginBottom: "14px" }}>
+                      {lockEntries.map((entry, idx) => (
+                        <div key={idx} style={{ display: "flex", gap: "10px", alignItems: "flex-start" }}>
+                          {/* Entry number badge */}
+                          <div style={{ width: "24px", height: "24px", borderRadius: "50%", background: "#f7971e22", border: "1px solid #f7971e55", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "0.72rem", color: "#f7971e", fontWeight: 700, flexShrink: 0, marginTop: "22px" }}>
+                            {idx + 1}
+                          </div>
+                          {/* Movie + Showtime sub-group */}
+                          <div style={{ display: "flex", flex: "0 0 auto", gap: "10px", flexWrap: "wrap" }}>
+                            {/* Movie picker */}
+                            <div style={{ flex: isMobile ? "1 1 100%" : "0 0 auto" }}>
+                              <div style={{ fontSize: "0.65rem", color: T.muted, letterSpacing: "0.08em", marginBottom: "5px" }}>MOVIE</div>
+                              <select value={entry.movieId} onChange={e => updateLockEntry(idx, "movieId", e.target.value)}
+                                style={{ background: T.input, color: T.text, border: `1px solid ${T.inputBorder}`, borderRadius: "8px", padding: "7px 12px", fontSize: "0.88rem", cursor: "pointer", width: "100%" }}>
+                                <option value="">Pick a movie...</option>
+                                {movies.map(m => (
+                                  <option key={m.id} value={m.id}
+                                    disabled={lockEntries.some((e, i) => i !== idx && e.movieId === String(m.id))}>
+                                    {m.emoji} {m.title}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                            {/* Showtime picker */}
+                            {entry.movieId && (
+                              <div style={{ flex: isMobile ? "1 1 100%" : "0 0 auto" }}>
+                                <div style={{ fontSize: "0.65rem", color: T.muted, letterSpacing: "0.08em", marginBottom: "5px" }}>
+                                  SHOWTIME <span style={{ color: T.faint }}>(optional)</span>
+                                </div>
+                                <select value={entry.showtime} onChange={e => updateLockEntry(idx, "showtime", e.target.value)}
+                                  style={{ background: T.input, color: T.text, border: `1px solid ${T.inputBorder}`, borderRadius: "8px", padding: "7px 12px", fontSize: "0.88rem", cursor: "pointer", width: "100%" }}>
+                                  <option value="">Any showtime</option>
+                                  {(showtimes[Number(entry.movieId)] || []).filter(p => isJoinable(p)).map(p => (
+                                    <option key={p} value={p}>{toTime(p)}</option>
+                                  ))}
+                                </select>
+                              </div>
+                            )}
+                          </div>
+                          {/* Remove button */}
+                          {lockEntries.length > 1 && (
+                            <button onClick={() => removeLockEntry(idx)}
+                              style={{ padding: "7px 10px", borderRadius: "8px", border: `1px solid ${T.inputBorder}`, background: "transparent", color: T.muted, cursor: "pointer", fontSize: "0.8rem", marginTop: "22px" }}>
+                              ✕
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Add another + Build row */}
+                    <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
+                      {lockEntries.length < MAX_LOCK_ENTRIES && (
+                        <button onClick={addLockEntry}
+                          style={{ padding: "8px 16px", borderRadius: "20px", border: `1px dashed #f7971e66`, background: "transparent", color: "#f7971e", cursor: "pointer", fontSize: "0.82rem" }}>
+                          ＋ Add another must-see
+                        </button>
+                      )}
+                      <button onClick={() => { if (lockEntries.some(e => e.movieId)) handleLockIn(); }}
+                        style={{ padding: "9px 20px", borderRadius: "8px", border: "none", background: lockEntries.some(e => e.movieId) ? "#f7971e" : T.inputBorder, color: lockEntries.some(e => e.movieId) ? "#000" : T.muted, cursor: lockEntries.some(e => e.movieId) ? "pointer" : "default", fontWeight: 800, fontSize: "0.88rem", opacity: lockEntries.some(e => e.movieId) ? 1 : 0.5 }}>
+                        Build My Day →
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* ── Quick Plans results ── */}
+                {planMode === "quick" && quickSuggestions.length > 0 && (
+                  <SuggestionList items={quickSuggestions} T={T} realStart={realStart} effectiveEnd={effectiveEnd} loadPlan={loadPlan} isMobile={isMobile} movies={movies} />
+                )}
+
+                {/* ── Lock In results: two sections ── */}
+                {planMode === "lockin" && (lockJustPicks.length > 0 || lockFillGaps.length > 0) && (
+                  <div style={{ marginTop: "20px", display: "flex", flexDirection: "column", gap: "24px" }}>
+
+                    {/* Section 1: Just your picks */}
+                    {lockJustPicks.length > 0 && (
+                      <div>
+                        <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "10px" }}>
+                          <div style={{ height: "1px", flex: 1, background: T.cardBorder }} />
+                          <span style={{ fontSize: "0.72rem", color: "#f7971e", fontWeight: 700, letterSpacing: "0.06em", whiteSpace: "nowrap" }}>
+                            🔒 JUST YOUR PICKS
+                          </span>
+                          <div style={{ height: "1px", flex: 1, background: T.cardBorder }} />
+                        </div>
+                        <p style={{ fontSize: "0.75rem", color: T.muted, marginBottom: "10px" }}>Only the movies you locked in, scheduled as tightly as possible.</p>
+                        <SuggestionList items={lockJustPicks} T={T} realStart={realStart} effectiveEnd={effectiveEnd} loadPlan={loadPlan} cardAccent="#f7971e" isMobile={isMobile} movies={movies} />
+                      </div>
+                    )}
+
+                    {/* Section 2: Fill the gaps */}
+                    {lockFillGaps.length > 0 && (
+                      <div>
+                        <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "10px" }}>
+                          <div style={{ height: "1px", flex: 1, background: T.cardBorder }} />
+                          <span style={{ fontSize: "0.72rem", color: T.sub, fontWeight: 700, letterSpacing: "0.06em", whiteSpace: "nowrap" }}>
+                            🎬 FILL THE GAPS
+                          </span>
+                          <div style={{ height: "1px", flex: 1, background: T.cardBorder }} />
+                        </div>
+                        <p style={{ fontSize: "0.75rem", color: T.muted, marginBottom: "10px" }}>Your picks plus other movies that fit around them.</p>
+                        <SuggestionList items={lockFillGaps} T={T} realStart={realStart} effectiveEnd={effectiveEnd} loadPlan={loadPlan} isMobile={isMobile} movies={movies} />
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* No combo / error message */}
+                {noComboMsg && (
+                  <div style={{ marginTop: "16px", background: T.warnBg, border: `1px solid ${T.warnBorder}`, borderRadius: "8px", padding: "12px 16px", fontSize: "0.82rem", color: "#e74c3c", lineHeight: "1.5" }}>
+                    {noComboMsg === "no_general"
+                      ? "No valid combinations found for the remaining showtimes. Try adjusting your buffer, enabling Skip Credits, or checking another day."
+                      : noComboMsg}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* YOUR DAY */}
+          {plan.length > 0 ? (
+            <div style={{ background: T.card, border: "1px solid #f7971e22", borderRadius: "14px", padding: "20px", marginBottom: "20px" }}>
+              <div style={{ fontSize: "0.68rem", color: T.muted, letterSpacing: "0.1em", fontWeight: 700, marginBottom: "14px" }}>
+                YOUR PLAN &nbsp;·&nbsp; {dateOptions[dateIdx].label.toUpperCase()}
+              </div>
+              <div style={{ marginBottom: "20px" }}>
+                <div style={{ display: isMobile ? "grid" : "flex", gridTemplateColumns: "1fr 1fr", gap: isMobile ? "14px 20px" : "0 28px", marginBottom: isMobile ? "14px" : "16px" }}>
+                  {[
+                    ["MOVIES",     `🎬 ${plan.length}`],
+                    ["TOTAL TIME", `⏱️ ${toDuration(planLast-planFirst)}`],
+                    ["ARRIVE",     `🚪 ${toTime(planFirst)}`],
+                    ["LEAVE",      `🌙 ${toTime(planLast)}`],
+                    ...(plan.length > 1 ? [
+                      ["TOTAL GAP",   `↕ ${toDuration(totalGapMins)}`],
+                      ["LONGEST GAP", `🍔 ${toDuration(longestGapMins)}`],
+                    ] : []),
+                  ].map(([label,val]) => (
+                    <div key={label}>
+                      <div style={{ fontSize: "0.65rem", color: T.muted, letterSpacing: "0.1em", marginBottom: "4px" }}>{label}</div>
+                      <div style={{ fontSize: isMobile ? "1.15rem" : "1.5rem", fontWeight: 800, color: "#ffd200", lineHeight: 1 }}>{val}</div>
+                    </div>
+                  ))}
+                </div>
+                {!isMobile && (
+                  <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                    <button onClick={copyPlan}
+                      style={{ padding: "8px 14px", borderRadius: "20px", border: `1px solid ${T.inputBorder}`, background: copied ? "#2ecc7122" : T.input, color: copied ? "#2ecc71" : T.sub, cursor: "pointer", fontSize: "0.8rem", fontWeight: copied ? 700 : 400, transition: "all 0.2s", whiteSpace: "nowrap" }}>
+                      {copied ? "✓ Copied!" : "📋 Copy"}
+                    </button>
+                    <button onClick={copyLink} title="Copy a shareable URL — anyone with the link loads this exact plan"
+                      style={{ padding: "8px 14px", borderRadius: "20px", border: "1px solid #27ae6055", background: "#27ae6011", color: "#27ae60", cursor: "pointer", fontSize: "0.8rem", fontWeight: 600, whiteSpace: "nowrap" }}>
+                      🔗 Share Plan
+                    </button>
+                    {navigator.share && (
+                      <button onClick={sharePlan} title="Share via system share sheet (OS)"
+                        style={{ padding: "8px 14px", borderRadius: "20px", border: "1px solid #3498db55", background: "#3498db11", color: "#3498db", cursor: "pointer", fontSize: "0.8rem", fontWeight: 600, whiteSpace: "nowrap" }}>
+                        📤 Send
+                      </button>
+                    )}
+                    <button onClick={saveToCalendar}
+                      style={{ padding: "8px 14px", borderRadius: "20px", border: "1px solid #8e44ad55", background: "#8e44ad11", color: "#8e44ad", cursor: "pointer", fontSize: "0.8rem", fontWeight: 600, whiteSpace: "nowrap" }}>
+                      📅 Calendar
+                    </button>
+                    <button onClick={() => { offerUndo(plan); setPlan([]); setExpandedId(null); showToast("↺ Day reset"); }}
+                      style={{ padding: "8px 14px", borderRadius: "20px", border: "1px solid #e74c3c55", background: "transparent", color: "#e74c3c", cursor: "pointer", fontSize: "0.8rem", fontWeight: 600, whiteSpace: "nowrap" }}>
+                      ↺ Reset
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Timeline */}
+              <div style={{ position: "relative", height: "52px", background: T.timeline, borderRadius: "10px", overflow: "hidden", marginBottom: "14px" }}>
+                {(isMobile ? [9,12,15,18,21] : [9,11,13,15,17,19,21,23]).map(h => (
+                  <div key={h} style={{ position: "absolute", left: pct(h*60), top: 0, bottom: 0, borderLeft: `1px solid ${T.timelineLine}` }}>
+                    <span style={{ fontSize: "0.58rem", color: T.timelineText, position: "absolute", bottom: "4px", left: "3px" }}>{h>12?`${h-12}p`:`${h}a`}</span>
+                  </div>
+                ))}
+                {plan.map((s, i) => {
+                  const movie = movies.find(m => m.id === s.movieId);
+                  const dur   = movie.runtime - (skipCredits ? CREDITS_ESTIMATE : 0);
+                  return (
+                    <div key={i} title={`${movie.title} · ${toTime(realStart(s.posted))}–${toTime(effectiveEnd(s.movieId,s.posted))}\nClick to remove this and all following movies`}
+                      onClick={() => handleClick(s.movieId, s.posted)}
+                      style={{ position: "absolute", left: pct(realStart(s.posted)), width: widthPct(dur), top: "7px", bottom: "7px", background: colorOf(s.movieId), borderRadius: "6px", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "0.67rem", fontWeight: 700, overflow: "hidden", whiteSpace: "nowrap", padding: "0 6px", cursor: "pointer", boxShadow: `0 0 12px ${colorOf(s.movieId)}55` }}>
+                      <span style={{ opacity: 0.75, marginRight: "3px" }}>{i+1}</span>{movie.emoji} {movie.title}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Legend */}
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", alignItems: "center" }}>
+                {plan.map((s, i) => {
+                  const movie = movies.find(m => m.id === s.movieId);
+                  const rs    = realStart(s.posted);
+                  const re    = effectiveEnd(s.movieId, s.posted);
+                  const gap   = i > 0 ? rs - effectiveEnd(plan[i-1].movieId, plan[i-1].posted) : null;
+                  return (
+                    <React.Fragment key={i}>
+                      {gap !== null && (
+                        <div style={{ fontSize: "0.75rem", color: gapColor(gap), fontWeight: 700, display: "flex", alignItems: "center", gap: "3px" }}>
+                          {gapEmoji(gap)} {toDuration(gap)}
+                        </div>
+                      )}
+                      <div style={{ display: "flex", alignItems: "center", gap: "7px", background: T.tagBg, borderRadius: "8px", padding: "7px 11px" }}>
+                        <div style={{ width: "20px", height: "20px", borderRadius: "50%", background: colorOf(s.movieId)+"22", border: `1px solid ${colorOf(s.movieId)}66`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "0.7rem", fontWeight: 800, color: colorOf(s.movieId), flexShrink: 0 }}>{i+1}</div>
+                        <span style={{ fontSize: "0.82rem", fontWeight: 600 }}>{movie.emoji} {movie.title}</span>
+                        {movie.postCredits && <span title="Post-credits scene!" style={{ fontSize: "0.72rem" }}>⚡</span>}
+                        <span style={{ fontSize: "0.74rem", color: T.muted }}>{toTime(rs)}–{toTime(re)}</span>
+                        <button onClick={() => handleClick(s.movieId, s.posted)} title="Remove this movie and all following" style={{ background: "none", border: "none", color: T.faint, cursor: "pointer", fontSize: "0.72rem", padding: 0, lineHeight: 1 }}>✕</button>
+                      </div>
+                    </React.Fragment>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
+            <div style={{ background: T.card, border: `1px dashed ${T.dashed}`, borderRadius: "14px", padding: "26px", marginBottom: "20px", textAlign: "center" }}>
+              <div style={{ fontSize: "1.8rem", marginBottom: "8px" }}>🎯</div>
+              <div style={{ fontSize: "0.95rem", color: T.sub, marginBottom: "6px" }}>No plan yet</div>
+              <div style={{ fontSize: "0.8rem", color: T.muted, marginBottom: "10px" }}>
+                Use <strong style={{ color: "#f7971e" }}>Plan My Day ↑</strong> to auto-generate the best schedule,
+                or pick showtimes directly from the movie cards below.
+              </div>
+              <div style={{ fontSize: "0.74rem", color: T.hint }}>Bright times = available &nbsp;·&nbsp; Dim times = conflicts with your current plan</div>
+            </div>
+          )}
+
+          {/* DOT LEGEND */}
+          {plan.length > 0 && (
+            <div style={{ display: "flex", gap: "18px", alignItems: "center", marginBottom: "12px", flexWrap: "wrap", fontSize: "0.74rem", color: T.muted }}>
+              <span style={{ fontWeight: 700, color: T.sub }}>Gap dots:</span>
+              {[["#2ecc71", "15+ min", "comfortable"], ["#f39c12", "5–15 min", "tight"], ["#e74c3c", "<5 min", "very tight"]].map(([clr, range, label]) => (
+                <span key={clr} style={{ display: "flex", alignItems: "center", gap: "5px" }}>
+                  <span style={{ width: "8px", height: "8px", borderRadius: "50%", background: clr, display: "inline-block", flexShrink: 0 }} />
+                  <span><strong style={{ color: T.sub }}>{range}</strong> — {label}</span>
+                </span>
+              ))}
+            </div>
+          )}
+
+          {/* MOVIE GRID */}
+          {isLoadingMeta && (
+            <div style={{ fontSize: "0.8rem", color: "#3498db", background: "#3498db11", border: "1px solid #3498db33", borderRadius: "10px", padding: "10px 16px", marginBottom: "12px", display: "flex", alignItems: "center", gap: "8px" }}>
+              <span style={{ animation: "spin 1s linear infinite", display: "inline-block" }}>⏳</span>
+              Loading movie details from TMDB…
+            </div>
+          )}
+          {isPlanning && (
+            <div style={{ fontSize: "0.8rem", color: "#f7971e", background: "#f7971e11", border: "1px solid #f7971e33", borderRadius: "10px", padding: "10px 16px", marginBottom: "12px", display: "flex", alignItems: "center", gap: "8px" }}>
+              <span style={{ animation: "spin 1s linear infinite", display: "inline-block" }}>🎬</span>
+              Finding the best schedules…
+            </div>
+          )}
+          {tmdbKeyError && (
+            <div style={{ fontSize: "0.8rem", color: "#e67e22", background: "#e67e2211", border: "1px solid #e67e2244", borderRadius: "10px", padding: "10px 16px", marginBottom: "12px", lineHeight: 1.5 }}>
+              ⚠️ <strong>Posters and movie details unavailable</strong> — the TMDB API key isn't configured in your Cloudflare Worker.
+              {" "}<a href="https://workers.cloudflare.com" target="_blank" rel="noopener noreferrer" style={{ color: "#f39c12" }}>Open Worker settings</a> → Variables → add secret <code style={{ background: "#e67e2222", padding: "1px 5px", borderRadius: "4px" }}>TMDB_API_KEY</code> → redeploy.
+            </div>
+          )}
+          {!isLoadingData && movies.length === 0 && (
+            <div style={{ background: T.card, border: `1px dashed ${T.dashed}`, borderRadius: "14px", padding: "36px", marginBottom: "20px", textAlign: "center" }}>
+              <div style={{ fontSize: "2rem", marginBottom: "10px" }}>🎭</div>
+              <div style={{ fontSize: "0.95rem", color: T.sub, marginBottom: "6px" }}>
+                {selectedTheater ? "No showtimes found for this theater today." : "No theater selected yet."}
+              </div>
+              <div style={{ fontSize: "0.8rem", color: T.muted }}>
+                {selectedTheater ? "Try a different date, or check back later." : "Search for a theater above to get started."}
+              </div>
+            </div>
+          )}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(290px, 1fr))", gap: isMobile ? "10px" : "14px", alignItems: "start" }}>
+            {movies.map((movie) => {
+              const anyJoinable = (showtimes[movie.id] || []).some(p => isJoinable(p));
+              const expanded    = expandedId === movie.id;
+              const inPlan      = plan.some(s => s.movieId === movie.id);
+              const isExcluded  = excludedIds.includes(movie.id);
+              return (
+                <div key={movie.id} style={{ background: T.card, borderRadius: "12px", padding: "16px", border: `1px solid ${inPlan ? colorOf(movie.id) + "88" : colorOf(movie.id) + "22"}`, boxShadow: inPlan ? `0 0 18px ${colorOf(movie.id)}22` : "none", opacity: isExcluded ? 0.42 : 1, transition: "border-color 0.2s, box-shadow 0.2s, opacity 0.2s" }}>
+
+                  {/* Header row */}
+                  <div style={{ display: "flex", gap: "11px", marginBottom: "10px", alignItems: "flex-start" }}>
+                    <div style={{ width: isMobile ? "54px" : "68px", height: isMobile ? "54px" : "68px", borderRadius: "10px", background: colorOf(movie.id)+"22", display: "flex", alignItems: "center", justifyContent: "center", fontSize: isMobile ? "1.6rem" : "2rem", flexShrink: 0, position: "relative", overflow: "hidden" }}>
+                      {/* Emoji always renders centered via flex — poster overlays it when available */}
+                      {movie.emoji}
+                      {(movie.posterPath || movie.fandangoPoster) && (
+                        <img
+                          key={movie.posterPath || movie.fandangoPoster}
+                          src={movie.posterPath ? TMDB_IMG_BASE + movie.posterPath : movie.fandangoPoster}
+                          alt={movie.title}
+                          onError={e => { console.warn("[TH] Poster img failed to load:", e.target.src); e.target.style.display = 'none'; }}
+                          style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "cover", borderRadius: "10px" }} />
+                      )}
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "5px" }}>
+                        <span style={{ fontWeight: 700, fontSize: "0.95rem" }}>{movie.title}</span>
+                        {movie.isMystery && <span title="Mystery screening — title revealed at showtime" style={{ fontSize: "0.6rem", fontWeight: 700, letterSpacing: "0.03em", background: "#9b59b622", color: "#9b59b6", border: "1px solid #9b59b655", borderRadius: "4px", padding: "1px 5px" }}>🎟️ MYSTERY</span>}
+                        {movie.postCredits && <span title="Has a post/mid-credits scene" style={{ fontSize: "0.72rem" }}>⚡</span>}
+                        <button onClick={() => setExpandedId(expanded ? null : movie.id)} title={expanded ? "Hide info" : "Show synopsis & info"}
+                          style={{ marginLeft: "auto", width: "20px", height: "20px", borderRadius: "50%", border: `1px solid ${T.inputBorder}`, background: expanded ? "#f7971e22" : T.input, color: expanded ? "#f7971e" : T.muted, cursor: "pointer", fontSize: "0.65rem", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontWeight: 700 }}>
+                          {expanded ? "▲" : "?"}
+                        </button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); toggleExclude(movie.id); }}
+                          title={isExcluded
+                            ? "Re-include in auto-plans (currently excluded from Quick Plans and Fill the Gaps)"
+                            : "Exclude from auto-plans — Quick Plans and Fill the Gaps will skip this movie. Click again to re-include."}
+                          style={{ width: "20px", height: "20px", borderRadius: "50%", border: `1px solid ${isExcluded ? "#e74c3c88" : T.inputBorder}`, background: isExcluded ? "#e74c3c22" : T.input, color: isExcluded ? "#e74c3c" : T.muted, cursor: "pointer", fontSize: "0.65rem", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontWeight: 700, transition: "all 0.2s" }}>
+                          {isExcluded ? "↩" : "✕"}
+                        </button>
+                      </div>
+                      <div style={{ color: T.muted, fontSize: "0.74rem", marginTop: "2px" }}>{movie.genre} · {movie.rating} · {toDuration(movie.runtime)}</div>
+                    </div>
+                  </div>
+
+                  {/* Expanded synopsis & info */}
+                  {expanded && (
+                    <div style={{ background: T.synopsisBg, borderRadius: "8px", padding: "12px 14px", marginBottom: "12px", lineHeight: "1.55", overflow: "hidden" }}>
+                      {/* Large poster — floated so synopsis wraps around it naturally */}
+                      {(movie.posterPath || movie.fandangoPoster) && (
+                        <img
+                          key={"large-" + (movie.posterPath || movie.fandangoPoster)}
+                          src={movie.posterPath ? TMDB_IMG_LARGE + movie.posterPath : movie.fandangoPoster}
+                          alt={movie.title}
+                          onError={e => { e.target.style.display = 'none'; }}
+                          style={{ float: "right", width: isMobile ? "72px" : "96px", borderRadius: "8px", marginLeft: "12px", marginBottom: "8px", display: "block" }} />
+                      )}
+                      {/* Synopsis */}
+                      {movie.synopsis
+                        ? <p style={{ fontSize: "0.8rem", color: T.sub, marginBottom: "10px" }}>{movie.synopsis}</p>
+                        : isLoadingMeta && <p style={{ fontSize: "0.8rem", color: T.faint, marginBottom: "10px" }}>Loading details…</p>
+                      }
+                      {/* Meta row — only show rows with actual data */}
+                      <div style={{ display: "flex", flexDirection: "column", gap: "5px", fontSize: "0.74rem" }}>
+                        {movie.director && (
+                          <div style={{ display: "flex", gap: "6px" }}>
+                            <span style={{ color: T.muted, minWidth: "52px" }}>Director</span>
+                            <span style={{ color: T.text, fontWeight: 600 }}>{movie.director}</span>
+                          </div>
+                        )}
+                        {movie.cast?.length > 0 && (
+                          <div style={{ display: "flex", gap: "6px" }}>
+                            <span style={{ color: T.muted, minWidth: "52px" }}>Cast</span>
+                            <span style={{ color: T.text }}>{movie.cast.join(", ")}</span>
+                          </div>
+                        )}
+                        {movie.tmdbScore !== "?" && (
+                          <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                            <span style={{ color: T.muted, minWidth: "52px" }}>Score</span>
+                            <span style={{ color: "#ffd200", fontWeight: 700 }}>★ {movie.tmdbScore}</span>
+                            <span style={{ color: T.faint, fontSize: "0.68rem" }}>/ 10 · TMDB</span>
+                          </div>
+                        )}
+                      </div>
+                      {/* Post-credits note */}
+                      {movie.postCredits && (
+                        <div style={{ marginTop: "8px", fontSize: "0.72rem", color: "#f7971e", fontWeight: 600 }}>⚡ Stay for a post-credits scene</div>
+                      )}
+                      {/* Trailer link — only show when URL is available */}
+                      {movie.trailerUrl && (
+                        <a href={movie.trailerUrl} target="_blank" rel="noopener noreferrer"
+                          style={{ display: "inline-flex", alignItems: "center", gap: "5px", marginTop: "10px", padding: "6px 12px", borderRadius: "20px", background: "#e74c3c22", border: "1px solid #e74c3c55", color: "#e74c3c", fontSize: "0.76rem", fontWeight: 700, textDecoration: "none", transition: "background 0.15s" }}
+                          onMouseEnter={e => e.currentTarget.style.background = "#e74c3c33"}
+                          onMouseLeave={e => e.currentTarget.style.background = "#e74c3c22"}>
+                          {movie.isMystery ? "🎟️ Event Info" : "▶ Watch Trailer"}
+                        </a>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Showtime buttons */}
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "7px" }}>
+                    {(showtimes[movie.id] || []).map(posted => {
+                      const sel   = isSelected(movie.id, posted);
+                      const avail = isAvailable(movie.id, posted);
+                      const join  = isJoinable(posted);
+                      const gap   = gapFromLast(movie.id, posted);
+                      const dot   = gap !== null ? gapColor(gap) : null;
+                      const rs    = realStart(posted);
+                      const re    = effectiveEnd(movie.id, posted);
+                      const fmtStr  = formats[movie.id]?.[posted];
+                      const fmtBadge = fmtStr
+                        ? (FORMAT_BADGES[fmtStr] || { label: fmtStr.slice(0, 5).toUpperCase(), color: "#7f8c8d" })
+                        : null;
+                      const whyUnavail = () => {
+                        if (plan.some(s => s.movieId === movie.id)) return "Already in your plan";
+                        if (plan.length > 0) {
+                          const last = plan[plan.length - 1];
+                          const lastMovie = movies.find(m => m.id === last.movieId);
+                          const actualGap = realStart(posted) - effectiveEnd(last.movieId, last.posted);
+                          if (actualGap < 0) return `Overlaps with ${lastMovie.title} (ends ${toTime(effectiveEnd(last.movieId, last.posted))})`;
+                          return `Only ${toDuration(actualGap)} gap after ${lastMovie.title} — need ${buffer} min`;
+                        }
+                        return "Not compatible with your current plan";
+                      };
+                      const tip = sel   ? "✕ Click to remove (and all movies after it)" :
+                                  !join ? "This showing has already started" :
+                                  !avail ? whyUnavail() :
+                                  [
+                                    `Start: ${toTime(rs)}   End: ${toTime(re)}`,
+                                    `(${toTime(posted)} posted + ${offset} min preshow${skipCredits?" − 8 min credits":""})`,
+                                    fmtStr ? `Format: ${fmtStr}` : "",
+                                    gap !== null ? `Gap from last: ${toDuration(gap)} ${gapEmoji(gap)}` : "",
+                                  ].filter(Boolean).join("\n");
+                      return (
+                        <button key={posted} onClick={() => handleClick(movie.id, posted)} title={tip}
+                          style={{ padding: isMobile ? "9px 14px" : "6px 12px", borderRadius: "20px", border: "none", cursor: (avail || sel) ? "pointer" : "default", fontSize: "0.8rem", fontWeight: sel ? 700 : 400, background: sel ? colorOf(movie.id) : avail ? T.input : theme==="dark" ? "#0c0c16" : "#e8eaf2", color: sel ? "#fff" : avail ? T.text : T.faint, boxShadow: sel ? `0 0 10px ${colorOf(movie.id)}66` : "none", outline: dot && !sel ? `2px solid ${dot}55` : "none", transition: "all 0.15s", display: "flex", alignItems: "center", gap: "5px" }}>
+                          {toTime(posted)}{sel ? " ✓" : ""}
+                          {fmtBadge && !sel && (
+                            <span style={{ fontSize: "0.58rem", fontWeight: 800, letterSpacing: "0.04em", background: fmtBadge.color + "22", color: fmtBadge.color, border: `1px solid ${fmtBadge.color}55`, borderRadius: "4px", padding: "1px 4px", lineHeight: 1.4, flexShrink: 0 }}>
+                              {fmtBadge.label}
+                            </span>
+                          )}
+                          {dot && !sel && avail && <span style={{ width: "6px", height: "6px", borderRadius: "50%", background: dot, display: "inline-block", flexShrink: 0 }} />}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {!anyJoinable && isToday && (
+                    <div style={{ fontSize: "0.72rem", color: "#e74c3c99", marginTop: "9px" }}>All showings today have passed</div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          <div style={{ textAlign: "center", marginTop: "40px", paddingBottom: "24px", color: T.faint, fontSize: "0.72rem" }}>
+            {usingLiveData
+              ? <>Live data via Fandango &nbsp;·&nbsp; Movie details via TMDB &nbsp;·&nbsp; Preshow times are estimates</>
+              : <>Demo mode — showtimes are illustrative · Enter a zip code to search real theaters</>}
+          </div>
+
+          {/* STICKY SHARE BAR — mobile only, when plan is active */}
+          {isMobile && plan.length > 0 && (
+            <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 200, background: T.card, borderTop: "1px solid #f7971e33", padding: "12px 16px", display: "flex", gap: "10px", boxShadow: "0 -4px 20px #00000055" }}>
+              <button onClick={copyPlan}
+                style={{ flex: 1, padding: "13px", borderRadius: "12px", border: `1px solid ${T.inputBorder}`, background: copied ? "#2ecc7122" : T.input, color: copied ? "#2ecc71" : T.text, cursor: "pointer", fontSize: "0.9rem", fontWeight: 700, transition: "all 0.2s" }}>
+                {copied ? "✓ Copied!" : "📋 Copy Plan"}
+              </button>
+              <button onClick={copyLink} title="Copy shareable link"
+                style={{ flex: 1, padding: "13px", borderRadius: "12px", border: "none", background: "linear-gradient(135deg,#27ae60,#219a52)", color: "#fff", cursor: "pointer", fontSize: "0.9rem", fontWeight: 700 }}>
+                🔗 Share Plan
+              </button>
+              {navigator.share && (
+                <button onClick={sharePlan} title="System share sheet"
+                  style={{ padding: "13px 14px", borderRadius: "12px", border: "1px solid #3498db55", background: "transparent", color: "#3498db", cursor: "pointer", fontSize: "0.9rem", fontWeight: 700 }}>
+                  📤
+                </button>
+              )}
+              <button onClick={saveToCalendar} title="Add to Calendar"
+                style={{ padding: "13px 14px", borderRadius: "12px", border: "1px solid #8e44ad55", background: "transparent", color: "#8e44ad", cursor: "pointer", fontSize: "0.9rem", fontWeight: 700 }}>
+                📅
+              </button>
+              <button onClick={() => { offerUndo(plan); setPlan([]); setExpandedId(null); showToast("↺ Day reset"); }}
+                style={{ padding: "13px 16px", borderRadius: "12px", border: "1px solid #e74c3c55", background: "transparent", color: "#e74c3c", cursor: "pointer", fontSize: "0.82rem", fontWeight: 700, whiteSpace: "nowrap" }}>
+                ↺ Reset
+              </button>
+            </div>
+          )}
+
+          {/* UNDO PILL — appears for 5s after a plan-clearing action */}
+          {undoPlan && (
+            <div style={{ position: "fixed", bottom: isMobile ? (plan.length > 0 ? "148px" : "24px") : "80px", left: "50%", transform: "translateX(-50%)", display: "flex", alignItems: "center", gap: "12px", background: T.card, border: `1px solid ${T.cardBorder}`, padding: "10px 16px 10px 18px", borderRadius: "24px", zIndex: 9998, boxShadow: "0 4px 20px #00000044", whiteSpace: "nowrap" }}>
+              <span style={{ fontSize: "0.82rem", color: T.sub }}>Plan cleared</span>
+              <button onClick={handleUndo} style={{ background: "#f7971e", border: "none", color: "#000", borderRadius: "12px", padding: "5px 14px", cursor: "pointer", fontSize: "0.8rem", fontWeight: 800 }}>
+                ↩ Undo
+              </button>
+            </div>
+          )}
+
+          {/* TOAST — always 90px on mobile so it never jumps when the sticky bar disappears */}
+          {toast && (
+            <div style={{ position: "fixed", bottom: isMobile ? "90px" : "28px", left: "50%", transform: "translateX(-50%)", background: "#2ecc71", color: "#fff", padding: "11px 22px", borderRadius: "24px", fontWeight: 700, fontSize: "0.88rem", zIndex: 9999, pointerEvents: "none", boxShadow: "0 4px 24px #00000055", whiteSpace: "nowrap" }}>
+              {toast}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
