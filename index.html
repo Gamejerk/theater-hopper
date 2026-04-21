@@ -15,6 +15,15 @@
   <meta name="twitter:title" content="Theater Hopper 🎬" />
   <meta name="twitter:description" content="Plan your perfect multi-movie day at the multiplex." />
   <!-- TODO BEFORE LAUNCH: add og:image, og:url, twitter:image with a real preview image -->
+
+  <!-- PWA / installable web app -->
+  <meta name="theme-color" content="#f7971e" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Theater Hopper" />
+  <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎬</text></svg>">
+
   <!-- NOTE: Babel standalone stays — it compiles JSX in-browser (no build step).
        React + ReactDOM are already on production builds (~11KB + ~120KB vs ~130KB + ~1.1MB dev). -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
@@ -941,8 +950,29 @@
       const comboWorkerRef       = React.useRef(null);   // Web Worker instance for combo generation
       const comboReqIdRef        = React.useRef(0);      // increments each request; stale responses are discarded
       const onComboResultRef     = React.useRef(null);   // { id, fn } — callback for current pending worker result
+      // FTUE spotlight target refs
+      const ftueZipRef           = React.useRef(null);   // zip input
+      const ftueTheaterListRef   = React.useRef(null);   // theater list container
+      const ftueMovieGridRef     = React.useRef(null);   // movie grid
       const [selectedTheater,  setSelectedTheater]  = useState(() => fromStorage('th_selectedTheater', null));
-      const [theaterOpen,      setTheaterOpen]      = useState(() => !fromStorage('th_selectedTheater', null));
+      const [theaterOpen,      setTheaterOpen]      = useState(() => {
+        // FTUE day: always start with theater panel open so zip input is visible
+        if (PROXY_URL) {
+          const today = new Date().toDateString();
+          if (localStorage.getItem('th_ftue_date') !== today) return true;
+        }
+        return !fromStorage('th_selectedTheater', null);
+      });
+      // FTUE: once-per-day first-time user experience walkthrough
+      const [ftueStep,         setFtueStep]         = useState(() => {
+        if (!PROXY_URL) return 0; // skip in demo mode
+        const today = new Date().toDateString();
+        return localStorage.getItem('th_ftue_date') === today ? 0 : 1;
+      });
+      const [spotlightRect,    setSpotlightRect]    = useState(null);
+      // Session hints: shown once per session at key moments
+      const [sessionHintsShown, setSessionHintsShown] = useState({ theaterLoad: false, firstMovie: false, planOpen: false });
+      const [currentHint,      setCurrentHint]      = useState(null);
       const [theaterQuery,     setTheaterQuery]     = useState(() => fromStorage('th_theaterQuery', ""));
       const [theaterRadius,    setTheaterRadius]    = useState(() => fromStorage('th_theaterRadius', 10));
       const [geoLoading,       setGeoLoading]       = useState(false);
@@ -967,6 +997,7 @@
       const nowMinutes  = getNowMinutes();
       const offset      = preshowOffset;
       const isMobile    = windowWidth <= 768;
+      const totalShowtimeCount = useMemo(() => movies.reduce((s, m) => s + (showtimes[m.id]?.length || 0), 0), [movies, showtimes]);
 
       // ── Time core ────────────────────────────────────────────────────────
       const realStart       = (p)              => p + offset;
@@ -1653,6 +1684,78 @@
         document.documentElement.setAttribute('data-theme', theme);
       }, [theme]);
 
+      // ── FTUE helpers ─────────────────────────────────────────────────────
+      const completeFtue = () => {
+        setFtueStep(0);
+        setSpotlightRect(null);
+        localStorage.setItem('th_ftue_date', new Date().toDateString());
+      };
+
+      // ── Session hint helper ───────────────────────────────────────────────
+      const showHint = (msg) => {
+        setCurrentHint(msg);
+        setTimeout(() => setCurrentHint(null), 6500);
+      };
+
+      // FTUE: update spotlight rect + scroll target into view when step changes
+      React.useEffect(() => {
+        if (ftueStep === 0) { setSpotlightRect(null); return; }
+        const refs = [null, ftueZipRef, ftueTheaterListRef, ftueMovieGridRef, null];
+        const ref = refs[ftueStep];
+        if (ref?.current) {
+          ref.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+          const updateRect = () => {
+            if (ref.current) {
+              const r = ref.current.getBoundingClientRect();
+              setSpotlightRect({ top: r.top, left: r.left, width: r.width, height: r.height });
+            }
+          };
+          // After scroll settles
+          setTimeout(updateRect, 350);
+        } else {
+          setSpotlightRect(null);
+        }
+      }, [ftueStep]);
+
+      // FTUE: auto-advance step 1 → 2 when theaters load
+      React.useEffect(() => {
+        if (ftueStep === 1 && theaters.length > 0) {
+          setTimeout(() => setFtueStep(2), 450);
+        }
+      }, [theaters.length]); // eslint-disable-line
+
+      // FTUE: auto-advance step 2 → 3 when theater selected
+      React.useEffect(() => {
+        if (ftueStep === 2 && selectedTheater) {
+          setTimeout(() => setFtueStep(3), 450);
+        }
+      }, [selectedTheater]); // eslint-disable-line
+
+      // Session hints: fire once per session at key moments (skip if FTUE active)
+      React.useEffect(() => {
+        if (ftueStep > 0) return;
+        if (movies.length > 0 && !sessionHintsShown.theaterLoad) {
+          showHint(`🎬 ${movies.length} movies · ${movies.reduce((s,m) => s+(showtimes[m.id]?.length||0), 0)} showtimes today — tap a time to build your plan, or use Plan My Day ↑`);
+          setSessionHintsShown(prev => ({ ...prev, theaterLoad: true }));
+        }
+      }, [movies.length]); // eslint-disable-line
+
+      React.useEffect(() => {
+        if (ftueStep > 0) return;
+        if (plan.length === 1 && !sessionHintsShown.firstMovie) {
+          showHint("✅ First movie added! Tap more showtimes to chain them, or try Plan My Day.");
+          setSessionHintsShown(prev => ({ ...prev, firstMovie: true }));
+        }
+      }, [plan.length]); // eslint-disable-line
+
+      React.useEffect(() => {
+        if (ftueStep > 0) return;
+        if (planOpen && !sessionHintsShown.planOpen) {
+          showHint("💡 Quick Plans auto-builds your best schedule. Lock In lets you guarantee specific movies.");
+          setSessionHintsShown(prev => ({ ...prev, planOpen: true }));
+        }
+      }, [planOpen]); // eslint-disable-line
+
       // ── Render ───────────────────────────────────────────────────────────
       return (
         <div style={{ background: T.bg, minHeight: "100vh", color: T.text, padding: isMobile ? "14px 16px" : "20px 24px", paddingBottom: isMobile && plan.length > 0 ? "90px" : undefined, transition: "background 0.25s, color 0.25s" }}>
@@ -1662,6 +1765,9 @@
             <div>
               <div style={{ fontSize: isMobile ? "1.65rem" : "2rem", fontWeight: 900, background: "linear-gradient(135deg,#f7971e,#ffd200)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", letterSpacing: "-0.5px" }}>
                 🎬 Theater Hopper
+              </div>
+              <div style={{ fontSize: "0.7rem", color: T.muted, marginTop: "1px", opacity: 0.6, letterSpacing: "0.01em" }}>
+                More movies, one day. We handle the math.
               </div>
               <div style={{ color: T.muted, fontSize: "0.82rem", marginTop: "3px" }}>
                 {selectedTheater
@@ -1697,14 +1803,23 @@
               <div style={{ display: "flex", alignItems: "center", gap: "12px", padding: "13px 18px" }}>
                 <span style={{ fontSize: "1.1rem" }}>📍</span>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <span
-                    onClick={() => setTheaterOpen(true)}
-                    onMouseEnter={e => { e.currentTarget.style.textDecoration = "underline"; e.currentTarget.style.color = "#f7971e"; }}
-                    onMouseLeave={e => { e.currentTarget.style.textDecoration = "none"; e.currentTarget.style.color = T.text; }}
-                    style={{ fontWeight: 700, fontSize: "0.92rem", cursor: "pointer", transition: "color 0.15s" }}>
-                    {selectedTheater.name}
-                  </span>
-                  <span style={{ color: T.muted, fontSize: "0.76rem", marginLeft: "10px" }}>{selectedTheater.dist} mi · {selectedTheater.chain} · +{CHAIN_DATA[selectedTheater.chain]?.offset ?? "?"}min preshow</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                    <span
+                      onClick={() => setTheaterOpen(true)}
+                      onMouseEnter={e => e.currentTarget.style.opacity = "0.75"}
+                      onMouseLeave={e => e.currentTarget.style.opacity = "1"}
+                      style={{ fontWeight: 700, fontSize: "0.92rem", cursor: "pointer", color: "#f7971e", transition: "opacity 0.15s" }}>
+                      {selectedTheater.name} <span style={{ fontSize: "0.68rem", opacity: 0.8 }}>▾</span>
+                    </span>
+                    {movies.length > 0 && (
+                      <span style={{ fontSize: "0.65rem", background: "#f7971e18", color: "#f7971e", border: "1px solid #f7971e33", borderRadius: "10px", padding: "2px 8px", fontWeight: 700, whiteSpace: "nowrap" }}>
+                        {movies.length} movies · {totalShowtimeCount} showtimes
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ color: T.muted, fontSize: "0.74rem", marginTop: "2px" }}>
+                    {selectedTheater.dist} mi · {selectedTheater.chain} · +{CHAIN_DATA[selectedTheater.chain]?.offset ?? "?"}min preshow
+                  </div>
                 </div>
               </div>
             ) : (
@@ -1720,7 +1835,7 @@
 
                 {/* Zip input + geolocation */}
                 <div style={{ display: "flex", gap: "8px", marginBottom: "12px", flexWrap: "wrap" }}>
-                  <input type="text" inputMode="numeric" pattern="[0-9]*" placeholder="Enter zip code..." value={theaterQuery}
+                  <input ref={ftueZipRef} type="text" inputMode="numeric" pattern="[0-9]*" placeholder="Enter zip code..." value={theaterQuery}
                     onChange={e => setTheaterQuery(e.target.value)}
                     style={{ flex: 1, minWidth: "140px", background: T.input, color: T.text, border: `1px solid ${T.inputBorder}`, borderRadius: "8px", padding: "8px 12px", fontSize: "0.88rem", outline: "none" }} />
                   <button onClick={handleGeolocate} disabled={geoLoading}
@@ -1750,7 +1865,7 @@
                     ⚠️ {dataError} — showing demo theaters
                   </div>
                 ) : filteredTheaters.length > 0 ? (
-                  <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                  <div ref={ftueTheaterListRef} style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
                     <div style={{ fontSize: "0.68rem", color: T.faint, marginBottom: "2px" }}>
                       {usingLiveData
                         ? `Live Fandango data · ${filteredTheaters.length} theater${filteredTheaters.length !== 1 ? "s" : ""} within ${theaterRadius} mi`
@@ -1863,7 +1978,7 @@
           )}
 
           {/* PLAN MY DAY */}
-          <div style={{ marginBottom: "16px" }}>
+          <div id="plan-anchor" style={{ marginBottom: "16px" }}>
             <button onClick={() => { setPlanOpen(o => !o); if (planOpen) { setQuickSuggestions([]); setLockJustPicks([]); setLockFillGaps([]); setQuickPreset(null); setNoComboMsg(""); } }}
               style={{ width: "100%", textAlign: "left", background: "linear-gradient(135deg,#f7971e,#ffd200)", border: "none", borderRadius: planOpen ? "12px 12px 0 0" : "12px", padding: "12px 20px", cursor: "pointer", color: "#000", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <div>
@@ -2186,7 +2301,7 @@
               </div>
             </div>
           )}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(290px, 1fr))", gap: isMobile ? "10px" : "14px", alignItems: "start" }}>
+          <div ref={ftueMovieGridRef} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(290px, 1fr))", gap: isMobile ? "10px" : "14px", alignItems: "start" }}>
             {movies.map((movie) => {
               const anyJoinable = (showtimes[movie.id] || []).some(p => isJoinable(p));
               const expanded    = expandedId === movie.id;
@@ -2355,31 +2470,133 @@
 
           {/* STICKY SHARE BAR — mobile only, when plan is active */}
           {isMobile && plan.length > 0 && (
-            <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 200, background: theme === "dark" ? "#13101f" : "#fff8ee", borderTop: "3px solid #f7971e", padding: "12px 16px", display: "flex", gap: "10px", boxShadow: "0 -6px 28px #f7971e22, 0 -2px 12px #00000055" }}>
+            <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 200, background: "linear-gradient(135deg, #f7971e, #ffd200)", padding: "10px 14px", display: "flex", gap: "8px", alignItems: "center", boxShadow: "0 -4px 28px #f7971e66, 0 -2px 12px #00000044" }}>
               <button onClick={copyPlan}
-                style={{ flex: 1, padding: "13px", borderRadius: "12px", border: `1px solid ${T.inputBorder}`, background: copied ? "#2ecc7122" : T.input, color: copied ? "#2ecc71" : T.text, cursor: "pointer", fontSize: "0.9rem", fontWeight: 700, transition: "all 0.2s" }}>
+                style={{ flex: 1, padding: "12px", borderRadius: "10px", border: "1px solid rgba(0,0,0,0.15)", background: copied ? "rgba(0,0,0,0.35)" : "rgba(0,0,0,0.18)", color: "#000", cursor: "pointer", fontSize: "0.88rem", fontWeight: 800, transition: "all 0.2s" }}>
                 {copied ? "✓ Copied!" : "📋 Copy Plan"}
               </button>
               <button onClick={copyLink} title="Copy shareable link"
-                style={{ flex: 1, padding: "13px", borderRadius: "12px", border: "none", background: "linear-gradient(135deg,#27ae60,#219a52)", color: "#fff", cursor: "pointer", fontSize: "0.9rem", fontWeight: 700 }}>
-                🔗 Share Plan
+                style={{ flex: 1, padding: "12px", borderRadius: "10px", border: "1px solid rgba(0,0,0,0.15)", background: "rgba(0,0,0,0.18)", color: "#000", cursor: "pointer", fontSize: "0.88rem", fontWeight: 800 }}>
+                🔗 Share
               </button>
               {navigator.share && (
                 <button onClick={sharePlan} title="System share sheet"
-                  style={{ padding: "13px 14px", borderRadius: "12px", border: "1px solid #3498db55", background: "transparent", color: "#3498db", cursor: "pointer", fontSize: "0.9rem", fontWeight: 700 }}>
+                  style={{ padding: "12px 13px", borderRadius: "10px", border: "1px solid rgba(0,0,0,0.15)", background: "rgba(0,0,0,0.18)", color: "#000", cursor: "pointer", fontSize: "0.88rem", fontWeight: 800 }}>
                   📤
                 </button>
               )}
               <button onClick={saveToCalendar} title="Add to Calendar"
-                style={{ padding: "13px 14px", borderRadius: "12px", border: "1px solid #8e44ad55", background: "transparent", color: "#8e44ad", cursor: "pointer", fontSize: "0.9rem", fontWeight: 700 }}>
+                style={{ padding: "12px 13px", borderRadius: "10px", border: "1px solid rgba(0,0,0,0.15)", background: "rgba(0,0,0,0.18)", color: "#000", cursor: "pointer", fontSize: "0.88rem", fontWeight: 800 }}>
                 📅
               </button>
               <button onClick={() => { offerUndo(plan); setPlan([]); setExpandedId(null); showToast("↺ Day reset"); }}
-                style={{ padding: "13px 16px", borderRadius: "12px", border: "1px solid #e74c3c55", background: "transparent", color: "#e74c3c", cursor: "pointer", fontSize: "0.82rem", fontWeight: 700, whiteSpace: "nowrap" }}>
-                ↺ Reset
+                style={{ padding: "12px 13px", borderRadius: "10px", border: "1px solid rgba(180,0,0,0.25)", background: "rgba(180,0,0,0.15)", color: "#5a0000", cursor: "pointer", fontSize: "0.88rem", fontWeight: 800 }}>
+                ↺
               </button>
             </div>
           )}
+
+          {/* SESSION HINT BANNER — fixed top, auto-dismisses after 6.5s */}
+          {currentHint && ftueStep === 0 && (
+            <div style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 9950, background: "linear-gradient(135deg, #f7971e, #ffd200)", color: "#000", padding: "11px 16px", fontSize: "0.82rem", fontWeight: 600, display: "flex", alignItems: "center", gap: "10px", boxShadow: "0 2px 14px #f7971e55", lineHeight: 1.4 }}>
+              <span style={{ flex: 1 }}>{currentHint}</span>
+              <button onClick={() => setCurrentHint(null)} style={{ background: "rgba(0,0,0,0.12)", border: "none", color: "#000", cursor: "pointer", fontSize: "0.85rem", fontWeight: 800, borderRadius: "50%", width: "24px", height: "24px", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>✕</button>
+            </div>
+          )}
+
+          {/* FTUE SPOTLIGHT OVERLAY — 4-step walkthrough, once per day */}
+          {ftueStep > 0 && (() => {
+            const PAD = 10;
+            const rect = spotlightRect;
+            const STEP_CONTENT = {
+              1: { icon: "👋", title: "Welcome to Theater Hopper!", body: "Enter your zip code below to find theaters near you — we'll pull live showtimes from Fandango.", cta: null },
+              2: { icon: "📍", title: "Pick your theater", body: "Tap any theater in the list and we'll load today's movies automatically.", cta: null },
+              3: { icon: "🎬", title: "Browse today's movies", body: "Tap any bright showtime to add it to your plan. Use Plan My Day to auto-build the perfect schedule.", cta: "Got it →" },
+              4: { icon: "🎯", title: "How do you want to plan?", body: null, choice: true },
+            };
+            const step = STEP_CONTENT[ftueStep];
+
+            return (
+              <>
+                {/* SVG dark overlay with transparent hole — pointerEvents:none so underlying UI still works */}
+                <svg style={{ position: "fixed", inset: 0, width: "100%", height: "100%", zIndex: 9990, pointerEvents: "none" }}>
+                  <defs>
+                    <mask id="ftue-hole">
+                      <rect width="100%" height="100%" fill="white" />
+                      {rect && (
+                        <rect x={rect.left - PAD} y={rect.top - PAD}
+                              width={rect.width + PAD * 2} height={rect.height + PAD * 2}
+                              rx="10" fill="black" />
+                      )}
+                    </mask>
+                  </defs>
+                  <rect width="100%" height="100%" fill="rgba(0,0,0,0.78)" mask="url(#ftue-hole)" />
+                  {/* Spotlight glow ring */}
+                  {rect && (
+                    <rect x={rect.left - PAD} y={rect.top - PAD}
+                          width={rect.width + PAD * 2} height={rect.height + PAD * 2}
+                          rx="10" fill="none" stroke="#f7971e" strokeWidth="2.5" opacity="0.9" />
+                  )}
+                </svg>
+
+                {/* Instruction card — always anchored at bottom center */}
+                <div style={{ position: "fixed", left: "50%", bottom: isMobile ? "20px" : "40px", transform: "translateX(-50%)", zIndex: 9992, pointerEvents: "all",
+                  background: theme === "dark" ? "#1a1a2e" : "#ffffff",
+                  border: "2px solid #f7971e55", borderRadius: "18px",
+                  padding: "20px 22px", maxWidth: "340px", width: "calc(100vw - 32px)",
+                  boxShadow: "0 12px 48px rgba(0,0,0,0.65), 0 0 0 1px rgba(247,151,30,0.2)" }}>
+
+                  {/* Step dots */}
+                  <div style={{ display: "flex", gap: "5px", marginBottom: "14px", justifyContent: "center" }}>
+                    {[1,2,3,4].map(n => (
+                      <div key={n} style={{ width: n === ftueStep ? "18px" : "6px", height: "6px", borderRadius: "3px", background: n === ftueStep ? "#f7971e" : (n < ftueStep ? "#f7971e55" : (theme === "dark" ? "#2a2a40" : "#d0d4e8")), transition: "all 0.25s" }} />
+                    ))}
+                  </div>
+
+                  <div style={{ fontSize: "1.4rem", marginBottom: "6px" }}>{step.icon}</div>
+                  <div style={{ fontWeight: 800, fontSize: "1rem", color: T.text, marginBottom: "8px" }}>{step.title}</div>
+                  {step.body && (
+                    <div style={{ fontSize: "0.82rem", color: T.sub, lineHeight: 1.55, marginBottom: "16px" }}>{step.body}</div>
+                  )}
+
+                  {step.choice ? (
+                    <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                      <button
+                        onClick={() => {
+                          completeFtue();
+                          setPlanOpen(true);
+                          setTimeout(() => document.getElementById('plan-anchor')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
+                        }}
+                        style={{ padding: "13px 16px", borderRadius: "10px", border: "none", background: "linear-gradient(135deg,#f7971e,#ffd200)", color: "#000", cursor: "pointer", fontWeight: 800, fontSize: "0.9rem", textAlign: "left" }}>
+                        🎯 Auto-plan my day →
+                      </button>
+                      <button onClick={completeFtue}
+                        style={{ padding: "13px 16px", borderRadius: "10px", border: `1px solid ${T.inputBorder}`, background: T.input, color: T.sub, cursor: "pointer", fontWeight: 600, fontSize: "0.88rem", textAlign: "left" }}>
+                        🎬 I'll browse and pick my own
+                      </button>
+                    </div>
+                  ) : (
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      {step.cta ? (
+                        <button onClick={() => setFtueStep(4)}
+                          style={{ padding: "10px 22px", borderRadius: "8px", border: "none", background: "linear-gradient(135deg,#f7971e,#ffd200)", color: "#000", cursor: "pointer", fontWeight: 800, fontSize: "0.88rem" }}>
+                          {step.cta}
+                        </button>
+                      ) : (
+                        <div style={{ fontSize: "0.74rem", color: T.faint, fontStyle: "italic" }}>
+                          {ftueStep === 1 ? "↑ Type your zip code above" : ftueStep === 2 ? "↑ Tap a theater from the list" : ""}
+                        </div>
+                      )}
+                      <button onClick={completeFtue}
+                        style={{ background: "none", border: `1px solid ${T.inputBorder}`, color: T.faint, cursor: "pointer", fontSize: "0.75rem", padding: "5px 11px", borderRadius: "20px", fontWeight: 600 }}>
+                        Skip tour
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </>
+            );
+          })()}
 
           {/* UNDO PILL — appears for 5s after a plan-clearing action */}
           {undoPlan && (
