@@ -958,16 +958,20 @@
       const [theaterOpen,      setTheaterOpen]      = useState(() => {
         // FTUE day: always start with theater panel open so zip input is visible
         if (PROXY_URL) {
-          const today = new Date().toDateString();
-          if (localStorage.getItem('th_ftue_date') !== today) return true;
+          try {
+            const today = new Date().toDateString();
+            if (localStorage.getItem('th_ftue_date') !== today) return true;
+          } catch {}
         }
         return !fromStorage('th_selectedTheater', null);
       });
       // FTUE: once-per-day first-time user experience walkthrough
       const [ftueStep,         setFtueStep]         = useState(() => {
         if (!PROXY_URL) return 0; // skip in demo mode
-        const today = new Date().toDateString();
-        return localStorage.getItem('th_ftue_date') === today ? 0 : 1;
+        try {
+          const today = new Date().toDateString();
+          return localStorage.getItem('th_ftue_date') === today ? 0 : 1;
+        } catch { return 0; } // if localStorage blocked (private browsing), skip FTUE
       });
       const [spotlightRect,    setSpotlightRect]    = useState(null);
       // Session hints: shown once per session at key moments
@@ -1661,6 +1665,15 @@
         // on next movies/showtimes update (e.g., after TMDB enrichment completes)
       }, [movies, showtimes]); // eslint-disable-line
 
+      // ── Reload movies from saved theater on page refresh ─────────────────
+      // plan is persisted but movies are not — without this, a saved plan
+      // renders with movies=[] and crashes on movie.runtime / movie.title access.
+      React.useEffect(() => {
+        if (selectedTheater?._movies?.length && PROXY_URL && movies.length === 0) {
+          loadMoviesForTheater(selectedTheater);
+        }
+      }, []); // eslint-disable-line — intentionally runs once on mount only
+
       // ── Persist settings + plan to localStorage ──────────────────────────
       React.useEffect(() => {
         toStorage('th_plan', plan);
@@ -1710,11 +1723,31 @@
               setSpotlightRect({ top: r.top, left: r.left, width: r.width, height: r.height });
             }
           };
-          // After scroll settles
+          // After scroll settles, then live-track via scroll/resize
           setTimeout(updateRect, 350);
         } else {
           setSpotlightRect(null);
         }
+      }, [ftueStep]);
+
+      // FTUE: keep spotlight ring locked to its element while user scrolls or resizes
+      React.useEffect(() => {
+        if (ftueStep === 0) return;
+        const refs = [null, ftueZipRef, ftueTheaterListRef, ftueMovieGridRef, null];
+        const ref = refs[ftueStep];
+        if (!ref?.current) return;
+        const update = () => {
+          if (ref.current) {
+            const r = ref.current.getBoundingClientRect();
+            setSpotlightRect({ top: r.top, left: r.left, width: r.width, height: r.height });
+          }
+        };
+        window.addEventListener('scroll', update, { passive: true });
+        window.addEventListener('resize', update, { passive: true });
+        return () => {
+          window.removeEventListener('scroll', update);
+          window.removeEventListener('resize', update);
+        };
       }, [ftueStep]);
 
       // FTUE: auto-advance step 1 → 2 when theaters load
@@ -1732,10 +1765,14 @@
       }, [selectedTheater]); // eslint-disable-line
 
       // Session hints: fire once per session at key moments (skip if FTUE active)
+      // Note: showtimes state updates separately from movies — use totalShowtimeCount
+      // only after both have settled (react on showtimes change, not movies.length)
       React.useEffect(() => {
         if (ftueStep > 0) return;
         if (movies.length > 0 && !sessionHintsShown.theaterLoad) {
-          showHint(`🎬 ${movies.length} movies · ${movies.reduce((s,m) => s+(showtimes[m.id]?.length||0), 0)} showtimes today — tap a time to build your plan, or use Plan My Day ↑`);
+          // totalShowtimeCount is in scope from the component body — use it directly
+          // (showtimes and movies are both stable by the time this effect fires on showtimes)
+          showHint(`🎬 ${movies.length} movies loaded — tap a showtime to build your plan, or use Plan My Day ↑`);
           setSessionHintsShown(prev => ({ ...prev, theaterLoad: true }));
         }
       }, [movies.length]); // eslint-disable-line
@@ -2149,7 +2186,7 @@
           </div>
 
           {/* YOUR DAY */}
-          {plan.length > 0 ? (
+          {plan.length > 0 && movies.length > 0 ? (
             <div style={{ background: T.card, border: "1px solid #f7971e22", borderRadius: "14px", padding: "20px", marginBottom: "20px" }}>
               <div style={{ fontSize: "0.68rem", color: T.muted, letterSpacing: "0.1em", fontWeight: 700, marginBottom: "14px" }}>
                 YOUR PLAN &nbsp;·&nbsp; {dateOptions[dateIdx].label.toUpperCase()}
@@ -2246,6 +2283,12 @@
                 })}
               </div>
             </div>
+          ) : plan.length > 0 ? (
+            /* plan exists but movies not loaded yet — brief state on refresh before restoration effect fires */
+            <div style={{ background: T.card, border: "1px solid #f7971e22", borderRadius: "14px", padding: "26px", marginBottom: "20px", textAlign: "center" }}>
+              <div style={{ fontSize: "1.4rem", marginBottom: "8px" }}>⏳</div>
+              <div style={{ fontSize: "0.88rem", color: T.sub }}>Restoring your plan…</div>
+            </div>
           ) : (
             <div style={{ background: T.card, border: `1px dashed ${T.dashed}`, borderRadius: "14px", padding: "26px", marginBottom: "20px", textAlign: "center" }}>
               <div style={{ fontSize: "1.8rem", marginBottom: "8px" }}>🎯</div>
@@ -2259,7 +2302,7 @@
           )}
 
           {/* DOT LEGEND */}
-          {plan.length > 0 && (
+          {plan.length > 0 && movies.length > 0 && (
             <div style={{ display: "flex", gap: "18px", alignItems: "center", marginBottom: "12px", flexWrap: "wrap", fontSize: "0.74rem", color: T.muted }}>
               <span style={{ fontWeight: 700, color: T.sub }}>Gap dots:</span>
               {[["#2ecc71", "15+ min", "comfortable"], ["#f39c12", "5–15 min", "tight"], ["#e74c3c", "<5 min", "very tight"]].map(([clr, range, label]) => (
