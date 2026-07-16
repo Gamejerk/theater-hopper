@@ -1709,9 +1709,26 @@
       // ── Reload movies from saved theater on page refresh ─────────────────
       // plan is persisted but movies are not — without this, a saved plan
       // renders with movies=[] and crashes on movie.runtime / movie.title access.
+      // _movies is stripped from localStorage to prevent quota bloat, so on
+      // reload we re-fetch theaters from the API and re-hydrate the saved one.
       React.useEffect(() => {
-        if (selectedTheater?._movies?.length && PROXY_URL && movies.length === 0) {
+        if (!PROXY_URL || movies.length > 0) return;
+        if (selectedTheater?._movies?.length) {
+          // Safety path — shouldn't occur since we strip _movies on save
           loadMoviesForTheater(selectedTheater);
+        } else if (selectedTheater && theaterQuery.trim()) {
+          // Normal reload path — fetch fresh showtimes and restore selected theater
+          const d = new Date(dateOptions[dateIdx]?.dateStr || Date.now());
+          const dateStr = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+          fetchTheaters(theaterQuery.trim(), dateStr, theaterRadius).then(results => {
+            if (!results) return;
+            const match = results.find(t => t.id === selectedTheater.id) ||
+                          results.find(t => t.name === selectedTheater.name);
+            if (match) {
+              setSelectedTheater(match);
+              loadMoviesForTheater(match);
+            }
+          });
         }
       }, []); // eslint-disable-line — intentionally runs once on mount only
 
